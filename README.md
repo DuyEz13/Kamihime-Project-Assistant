@@ -1,17 +1,6 @@
 # KamiWiki
 
-FastAPI wiki for Kamihime Project character data.
-
-## Data pipeline
-
-1. The web UI starts a background refresh.
-2. The crawler downloads and parses the configured Japanese wiki pages.
-3. Each element is written atomically to its own file:
-   `kami/data/kamihime_<element>_raw.jsonl`.
-4. The wiki reloads and renders all element files together.
-
-Automatic Gemini translation is temporarily disabled to avoid API quota usage.
-`kami/translator.py` remains available for re-enabling translation later.
+A simplified wiki website about Kamihime Project that integrates a chatbot to assist with questions about in-game character information or how to build a team and weapon grid.
 
 ## Setup with uv
 
@@ -69,3 +58,43 @@ The element pages provide two update modes:
   existing skills, stats, and flavor text are captured.
 
 Existing element files are replaced atomically only after an update succeeds.
+
+## Project Structure
+
+```text
+KamiWiki/
+|-- app/
+|   |-- main.py                 # FastAPI application, routes, and static mounts
+|   |-- static/
+|   |   |-- wiki.css            # Website layout and component styles
+|   |   `-- wiki.js             # Client-side update status and UI behavior
+|   `-- templates/
+|       |-- base.html            # Shared page layout and element sidebar
+|       |-- index.html           # Home and chat-style landing page
+|       |-- element.html         # Character list page for one element
+|       `-- character.html       # Character information and skill page
+|-- kami/
+|   |-- data/
+|   |   `-- kamihime_*_raw.jsonl # Active character data, split by element
+|   |-- crawler.py              # Crawls character lists and detail pages
+|   |-- pipeline.py             # Runs latest/full updates in the background
+|   |-- data_store.py           # Loads, normalizes, filters, and finds characters
+|   |-- data_loader.py          # Generic JSONL record iterator
+|   |-- translator.py           # Optional Japanese-to-English Gemini pipeline
+|   |-- build_index.py          # Optional FAISS/RAG index builder
+|   |-- kamihime_raw.jsonl      # Legacy combined raw-data fallback
+|   |-- all_kami_data.jsonl     # Legacy JSONL data fallback
+|   `-- all_kami_data.json      # Legacy JSON data snapshot
+|-- img/                        # Element icons used by the sidebar
+|-- test.ipynb                  # Experimental crawler and data inspection notebook
+|-- .env.example                # Example environment variables
+|-- .python-version             # Python version selected by uv
+|-- pyproject.toml              # Project metadata and dependency definitions
+|-- requirements.txt            # Core pip-compatible dependency list
+|-- uv.lock                     # Reproducible dependency lockfile
+`-- README.md                   # Project documentation
+```
+
+The application normally reads the six element-specific files under
+`kami/data/`. The combined files directly under `kami/` are retained as
+backward-compatible fallbacks and are not the primary crawl output.
