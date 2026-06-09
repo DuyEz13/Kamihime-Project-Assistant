@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}KamiWiki{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='/wiki.css') }}">
+</head>
+<body>
+  <div class="app-layout">
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-top">
+        <a class="brand-row" href="/">
+          <span class="brand-mark">K</span>
+          <span>KamiWiki</span>
+        </a>
+        <a class="new-chat-button" href="/">
+          <span>+</span>
+          New chat
+        </a>
+
+        <p class="sidebar-label">Elements</p>
+        <nav class="element-nav" aria-label="Elements">
+          {% for item in elements %}
+          <a
+            class="element-link {% if active_element == item.key %}active{% endif %}"
+            href="/elements/{{ item.key }}"
+          >
+            <img src="/img/{{ item.image }}" alt="">
+            <span>{{ item.label }}</span>
+          </a>
+          {% endfor %}
+        </nav>
+      </div>
+
+      <div class="chat-history">
+        <p class="sidebar-label">Chat history</p>
+        <a href="/" class="history-link active">
+          <span class="history-icon">◷</span>
+          <span>Explore Kamihime data</span>
+        </a>
+        <a href="/" class="history-link">
+          <span class="history-icon">◷</span>
+          <span>Fire team recommendations</span>
+        </a>
+        <a href="/" class="history-link">
+          <span class="history-icon">◷</span>
+          <span>Compare character skills</span>
+        </a>
+        <p class="history-note">Chat history is UI-only for now.</p>
+      </div>
+    </aside>
+
+    <div id="sidebar-backdrop" class="sidebar-backdrop"></div>
+
+    <main class="main-area">
+      <header class="topbar">
+        <button id="sidebar-toggle" class="icon-button" type="button" aria-label="Open navigation">☰</button>
+        <a class="mobile-brand" href="/">KamiWiki</a>
+        <span class="topbar-title">{% block topbar_title %}Kami Assistant{% endblock %}</span>
+      </header>
+      <div class="content-area">
+        {% block content %}{% endblock %}
+      </div>
+    </main>
+  </div>
+  <script src="{{ url_for('static', path='/wiki.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

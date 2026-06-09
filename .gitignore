@@ -1,0 +1,28 @@
+# Secrets
+.env
+
+# Python environments
+.venv/
+venv/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Notebook and editor caches
+.ipynb_checkpoints/
+.vscode/
+.idea/
+
+# Runtime output
+*.log
+*.tmp
+vectorstore/
+
+# OS files
+.DS_Store
+Thumbs.db

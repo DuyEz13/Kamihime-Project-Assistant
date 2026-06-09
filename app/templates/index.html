@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Kami Assistant | KamiWiki{% endblock %}
+{% block content %}
+<section class="chat-page">
+  <div id="chat-thread" class="chat-thread">
+    <div class="chat-welcome">
+      <span class="assistant-logo">K</span>
+      <h1>How can I help with Kamihime?</h1>
+      <p>Ask about characters, elements, skills, or team ideas.</p>
+      <div class="prompt-suggestions">
+        <button type="button" data-prompt="Show me notable Fire characters">Notable Fire characters</button>
+        <button type="button" data-prompt="Compare Burst and Ability skills">Compare skill types</button>
+        <button type="button" data-prompt="Which element should I browse?">Browse by element</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="chat-composer-wrap">
+    <form id="chat-form" class="chat-composer">
+      <textarea id="chat-input" rows="1" placeholder="Message KamiWiki..." aria-label="Chat message"></textarea>
+      <button class="send-button" type="submit" aria-label="Send message">↑</button>
+    </form>
+    <p class="composer-note">The chat model is not connected yet. This interface is a UI preview.</p>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}{{ element.label }} Characters | KamiWiki{% endblock %}
+{% block topbar_title %}{{ element.label }} Characters{% endblock %}
+{% block content %}
+<section class="library-page element-{{ element.key }}">
+  <div class="library-header">
+    <div class="element-title">
+      <img src="/img/{{ element.image }}" alt="">
+      <div>
+        <p class="section-kicker">Element archive</p>
+        <h1>{{ element.label }} Characters</h1>
+        <p>{{ characters|length }} entries in the current dataset.</p>
+      </div>
+    </div>
+    <div class="update-actions">
+      <button
+        class="refresh-button update-button"
+        data-update-mode="latest"
+        type="button"
+      >Update latest characters</button>
+      <button
+        class="refresh-button secondary update-button"
+        data-update-mode="database"
+        type="button"
+      >Update Database</button>
+    </div>
+  </div>
+
+  <div id="refresh-status" class="status" data-state="{{ refresh.state }}">{{ refresh.message }}</div>
+
+  <form class="library-search" method="get">
+    <input name="q" value="{{ query }}" placeholder="Search {{ element.label }} characters..." aria-label="Search characters">
+    <button type="submit">Search</button>
+    {% if query %}<a href="/elements/{{ element.key }}">Clear</a>{% endif %}
+  </form>
+
+  {% if characters %}
+  <div class="character-table-wrap">
+    <table class="character-list-table">
+      <thead>
+        <tr>
+          <th class="image-column">Image</th>
+          <th>Character</th>
+          <th class="date-column">Release date</th>
+          <th>Acquisition method</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for character in characters %}
+        <tr>
+          <td class="character-list-image">
+            <a href="/characters/{{ character.slug }}">
+              {% if character.list_image %}
+              <img src="{{ character.list_image }}" alt="{{ character.name }}" loading="lazy">
+              {% else %}
+              <span class="image-placeholder">K</span>
+              {% endif %}
+            </a>
+          </td>
+          <td class="character-name-cell">
+            <a href="/characters/{{ character.slug }}">{{ character.name }}</a>
+          </td>
+          <td class="date-cell">{{ character.release_date }}</td>
+          <td class="acquisition-cell">{{ character.acquisition_method }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty-state">No matching characters found.</p>
+  {% endif %}
+</section>
+{% endblock %}
