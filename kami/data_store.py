@@ -28,9 +28,17 @@ def _data_paths() -> list[Path]:
     if configured:
         return [configured]
 
-    element_paths = sorted(DATA_DIR.glob("kamihime_*_raw.jsonl"))
-    if element_paths:
-        return element_paths
+    raw_element_paths = sorted(DATA_DIR.glob("kamihime_*_raw.jsonl"))
+    if raw_element_paths:
+        paths: list[Path] = []
+        for raw_path in raw_element_paths:
+            english_path = raw_path.with_name(
+                raw_path.name.replace("_raw.jsonl", "_en.jsonl")
+            )
+            paths.append(
+                english_path if english_path.exists() else raw_path
+            )
+        return paths
     if RAW_DATA_PATH.exists():
         return [RAW_DATA_PATH]
     if ENGLISH_DATA_PATH.exists():

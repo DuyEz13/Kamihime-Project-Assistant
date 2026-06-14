@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from .crawler import crawl_all_elements, update_all_elements_latest
 from .data_store import DATA_DIR
+from .translator import translate_elements
 
 
 _lock = threading.Lock()
@@ -13,6 +14,11 @@ _status = {
     "finished_at": None,
     "characters": None,
     "mode": None,
+    "progress": None,
+    "processed": None,
+    "total": None,
+    "device": None,
+    "model": None,
 }
 
 
@@ -28,6 +34,24 @@ def get_refresh_status() -> dict:
 def _set_status(**values) -> None:
     with _lock:
         _status.update(values)
+
+
+def _translation_progress(progress: dict) -> None:
+    phase = progress["phase"]
+    if phase == "loading":
+        message = f"Loading translation model on {progress['device']}..."
+    elif phase == "preparing":
+        message = "Checking the translation cache..."
+    else:
+        message = (
+            f"Translating locally on {progress['device']}: "
+            f"{progress['processed']}/{progress['total']} text chunks"
+        )
+    _set_status(
+        state="translating",
+        message=message,
+        **progress,
+    )
 
 
 def _run_update(mode: str) -> None:
@@ -47,10 +71,22 @@ def _run_update(mode: str) -> None:
             removed_entries = sum(
                 result["removed_entries"] for result in results.values()
             )
+            _set_status(
+                state="translating",
+                mode=mode,
+                message="Translating updated element data locally...",
+                progress=0,
+            )
+            translated = translate_elements(
+                DATA_DIR,
+                results,
+                _translation_progress,
+            )
             message = (
                 f"Latest update completed: {new_entries} new entries, "
                 f"{crawled_details} new detail pages crawled, "
-                f"{removed_entries} duplicate or stale entries removed"
+                f"{removed_entries} duplicate or stale entries removed, "
+                f"{sum(translated.values())} records rendered in English"
             )
         elif mode == "database":
             _set_status(
@@ -59,11 +95,24 @@ def _run_update(mode: str) -> None:
                 message="Rebuilding the full character database...",
             )
             counts = crawl_all_elements(DATA_DIR)
+            _set_status(
+                state="translating",
+                mode=mode,
+                message="Translating the rebuilt database locally...",
+                progress=0,
+            )
+            translated = translate_elements(
+                DATA_DIR,
+                counts,
+                _translation_progress,
+            )
             total = sum(counts.values())
             summary = ", ".join(
                 f"{element}: {count}" for element, count in counts.items()
             )
-            message = f"Database update completed: {summary}"
+            message = (
+                f"Database update completed and translated locally: {summary}"
+            )
         else:
             raise ValueError(f"Unknown update mode: {mode}")
 
@@ -71,6 +120,7 @@ def _run_update(mode: str) -> None:
             state="completed",
             message=message,
             characters=total,
+            progress=100,
             finished_at=_now(),
         )
     except Exception as exc:
@@ -86,7 +136,7 @@ def _run_update(mode: str) -> None:
 
 def start_update(mode: str) -> bool:
     with _lock:
-        if _status["state"] in {"starting", "updating"}:
+        if _status["state"] in {"starting", "updating", "translating"}:
             return False
         _status.update(
             {
@@ -96,6 +146,11 @@ def start_update(mode: str) -> bool:
                 "started_at": _now(),
                 "finished_at": None,
                 "characters": None,
+                "progress": None,
+                "processed": None,
+                "total": None,
+                "device": None,
+                "model": None,
             }
         )
 

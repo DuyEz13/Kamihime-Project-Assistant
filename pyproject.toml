@@ -15,7 +15,11 @@ dependencies = [
 
 [project.optional-dependencies]
 translation = [
-    "langchain-google-genai>=4,<5",
+    "accelerate>=1.2,<2",
+    "sacremoses>=0.1,<1",
+    "sentencepiece>=0.2,<1",
+    "torch>=2.2,<3",
+    "transformers>=4.48,<5",
 ]
 rag = [
     "faiss-cpu>=1.9,<2",
@@ -30,3 +34,6 @@ dev = [
 
 [tool.uv]
 default-groups = ["dev"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

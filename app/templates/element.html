@@ -26,7 +26,36 @@
     </div>
   </div>
 
-  <div id="refresh-status" class="status" data-state="{{ refresh.state }}">{{ refresh.message }}</div>
+  <div id="refresh-status" class="status" data-state="{{ refresh.state }}">
+    <div id="refresh-message">{{ refresh.message }}</div>
+    <div
+      id="translation-progress"
+      class="translation-progress"
+      {% if refresh.state != "translating" %}hidden{% endif %}
+    >
+      <div class="progress-meta">
+        <span id="translation-device">{{ refresh.device or "Detecting device..." }}</span>
+        <span id="translation-percent">{{ refresh.progress or 0 }}%</span>
+      </div>
+      <div
+        class="progress-track"
+        role="progressbar"
+        aria-label="Translation progress"
+        aria-valuemin="0"
+        aria-valuemax="100"
+        aria-valuenow="{{ refresh.progress or 0 }}"
+      >
+        <div
+          id="translation-progress-bar"
+          class="progress-fill"
+          style="width: {{ refresh.progress or 0 }}%"
+        ></div>
+      </div>
+      <div id="translation-model" class="progress-model">
+        {{ refresh.model or "" }}
+      </div>
+    </div>
+  </div>
 
   <form class="library-search" method="get">
     <input name="q" value="{{ query }}" placeholder="Search {{ element.label }} characters..." aria-label="Search characters">

@@ -340,10 +340,41 @@ button { cursor: pointer; }
 
 .status[data-state="starting"],
 .status[data-state="updating"],
+.status[data-state="translating"],
 .status[data-state="completed"],
 .status[data-state="failed"] { display: block; }
 .status[data-state="failed"] { border-color: #b32424; background: #fee7e6; }
 .status[data-state="completed"] { border-color: #14866d; background: #e6f5ef; }
+
+.translation-progress { margin-top: 0.7rem; }
+.progress-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.4rem;
+  color: #29445c;
+  font-size: 0.85rem;
+  font-weight: 650;
+}
+.progress-track {
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #d6e2ed;
+}
+.progress-fill {
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--element-color);
+  transition: width 0.25s ease;
+}
+.progress-model {
+  margin-top: 0.35rem;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
 
 .library-search {
   display: flex;
