@@ -27,19 +27,6 @@ Copy `.env.example` to `.env` and configure values as needed:
 KAMI_ELEMENTS=fire,water,wind,thunder,light,dark
 ```
 
-No translation API key is required. The refresh pipeline uses
-[`google/madlad400-3b-mt`](https://huggingface.co/google/madlad400-3b-mt)
-through Hugging Face Transformers. MADLAD-400 is a 3B-parameter multilingual
-translation model and produces substantially better general-purpose output
-than the previous small MarianMT model. It is still a research model, so its
-quality is not guaranteed to match the production Google Translate service,
-especially for Kamihime-specific names and terminology.
-
-The original model weights are about 11.8 GB. The model is downloaded to the
-local Hugging Face cache on the first translation and reused afterward. CPU
-translation requires substantial RAM and is slow; a CUDA GPU with enough VRAM
-is strongly preferred.
-
 Configure local translation with:
 
 ```dotenv
@@ -68,11 +55,6 @@ uv run python scripts/test_translation.py `
   --text "敵全体に火属性ダメージ" `
   --text "味方全体のバーストゲージUP"
 ```
-
-Use `--device cpu` or `--device cuda` to override automatic device selection.
-The script prints the model, device, progress, Japanese source, and English
-result. It may update `.translation_cache.json`, but it never writes an element
-`_en.jsonl` file.
 
 Individual source URLs can be overridden with environment variables such as
 `KAMI_SOURCE_URL_FIRE` or `KAMI_SOURCE_URL_WATER`.
@@ -133,7 +115,7 @@ KamiWiki/
 |   |-- pipeline.py             # Runs latest/full updates in the background
 |   |-- data_store.py           # Loads, normalizes, filters, and finds characters
 |   |-- data_loader.py          # Generic JSONL record iterator
-|   |-- translator.py           # Local MADLAD-400 translation and text cache
+|   |-- translator.py           # Local translation and text cache
 |   |-- build_index.py          # Optional FAISS/RAG index builder
 |   |-- kamihime_raw.jsonl      # Legacy combined raw-data fallback
 |   |-- all_kami_data.jsonl     # Legacy JSONL data fallback
