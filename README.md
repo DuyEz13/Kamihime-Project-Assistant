@@ -44,6 +44,17 @@ GPU on Linux. AutoAWQ depends on Triton, which does not provide Windows wheels.
 A Colab T4 runtime can run the quantized model. Translation is deterministic
 and processes multiple data points in one JSON batch.
 
+AutoAWQ is deprecated and only supports a narrow dependency range. The
+translation extra intentionally pins the last tested stack:
+
+- `autoawq==0.2.9`
+- `torch==2.6.0`
+- `transformers==4.51.3`
+
+Do not upgrade Transformers independently. Newer releases remove activation
+classes that AutoAWQ still imports and cause errors such as
+`cannot import name 'PytorchGELUTanh'`.
+
 Consistency is enforced by:
 
 - `kami/translation_glossary.json`, which defines canonical Kamihime terms.
@@ -63,6 +74,17 @@ For Google Colab, select a GPU runtime and install the translation extra:
 !pip install uv
 !uv sync --extra translation
 ```
+
+After changing an existing Colab environment, recreate `.venv` or force an
+exact sync so the incompatible Transformers version is removed:
+
+```bash
+!rm -rf .venv
+!uv sync --extra translation
+!uv run python -c "import torch, transformers; print(torch.__version__, transformers.__version__)"
+```
+
+The expected versions are `2.6.0` and `4.51.3`.
 
 Test a small translation sample without rebuilding or overwriting the English
 element files:

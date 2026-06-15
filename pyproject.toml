@@ -16,9 +16,9 @@ dependencies = [
 [project.optional-dependencies]
 translation = [
     "accelerate>=1.2,<2",
-    "autoawq>=0.2.7,<0.3; sys_platform == 'linux'",
-    "torch>=2.2,<3",
-    "transformers>=4.48,<5",
+    "autoawq==0.2.9; sys_platform == 'linux'",
+    "torch==2.6.0",
+    "transformers==4.51.3",
 ]
 rag = [
     "faiss-cpu>=1.9,<2",

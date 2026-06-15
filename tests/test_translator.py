@@ -3,6 +3,8 @@ import json
 from kami.translator import (
     KEY_TRANSLATIONS,
     LocalJapaneseEnglishTranslator,
+    SUPPORTED_TORCH_VERSION,
+    SUPPORTED_TRANSFORMERS_VERSION,
     _extract_json_array,
 )
 
@@ -150,3 +152,8 @@ def test_glossary_change_invalidates_translation_cache(tmp_path):
     assert first.translation_cache_key("攻撃UP") != second.translation_cache_key(
         "攻撃UP"
     )
+
+
+def test_autoawq_compatibility_versions_are_pinned():
+    assert SUPPORTED_TORCH_VERSION == "2.6.0"
+    assert SUPPORTED_TRANSFORMERS_VERSION == "4.51.3"

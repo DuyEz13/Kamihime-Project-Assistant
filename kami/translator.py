@@ -8,6 +8,8 @@ from typing import Any, Callable, Iterable
 
 
 DEFAULT_MODEL = "Qwen/Qwen2.5-14B-Instruct-AWQ"
+SUPPORTED_TORCH_VERSION = "2.6.0"
+SUPPORTED_TRANSFORMERS_VERSION = "4.51.3"
 CACHE_FILE = ".translation_cache.json"
 DEFAULT_GLOSSARY_FILE = Path(__file__).with_name("translation_glossary.json")
 PROMPT_VERSION = "qwen-kamihime-v1"
@@ -263,12 +265,27 @@ class LocalJapaneseEnglishTranslator:
             return
         self._resolve_device()
         try:
+            import transformers
             from transformers import AutoModelForCausalLM, AutoTokenizer
         except ImportError as exc:
             raise RuntimeError(
                 "Qwen translation dependencies are missing. "
                 "Run `uv sync --extra translation`."
             ) from exc
+
+        torch_version = self._torch.__version__.split("+", 1)[0]
+        if (
+            torch_version != SUPPORTED_TORCH_VERSION
+            or transformers.__version__ != SUPPORTED_TRANSFORMERS_VERSION
+        ):
+            raise RuntimeError(
+                "AutoAWQ requires the pinned compatibility stack: "
+                f"torch=={SUPPORTED_TORCH_VERSION} and "
+                f"transformers=={SUPPORTED_TRANSFORMERS_VERSION}. "
+                f"Found torch=={self._torch.__version__} and "
+                f"transformers=={transformers.__version__}. "
+                "Recreate .venv and run `uv sync --extra translation`."
+            )
 
         if progress_callback:
             progress_callback(
@@ -288,7 +305,7 @@ class LocalJapaneseEnglishTranslator:
         )
         self._model = AutoModelForCausalLM.from_pretrained(
             self.model_name,
-            torch_dtype="auto",
+            torch_dtype=self._torch.float16,
             device_map="auto" if self._device == "cuda" else None,
             low_cpu_mem_usage=True,
         )
