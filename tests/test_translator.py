@@ -3,7 +3,7 @@ import json
 from kami.translator import (
     KEY_TRANSLATIONS,
     LocalJapaneseEnglishTranslator,
-    _cache_key,
+    _extract_json_array,
 )
 
 
@@ -14,7 +14,7 @@ def test_translator_preserves_structural_values_and_translates_schema(tmp_path):
         "闇属性ダメージ": "Dark-element damage",
     }
     for source, translated in translations.items():
-        translator.cache[_cache_key(translator.model_name, source)] = {
+        translator.cache[translator.translation_cache_key(source)] = {
             "source": source,
             "translation": translated,
         }
@@ -68,7 +68,7 @@ def test_translate_file_writes_valid_jsonl_atomically(tmp_path):
 def test_cached_translation_reports_progress_and_device(tmp_path):
     translator = LocalJapaneseEnglishTranslator(tmp_path, model_name="test-model")
     source = "炎の女神"
-    translator.cache[_cache_key(translator.model_name, source)] = {
+    translator.cache[translator.translation_cache_key(source)] = {
         "source": source,
         "translation": "Goddess of Flame",
     }
@@ -85,19 +85,34 @@ def test_cached_translation_reports_progress_and_device(tmp_path):
     assert events[-1]["device"] in {"CPU"} or events[-1]["device"].startswith("GPU:")
 
 
-def test_madlad_input_includes_english_target_prefix(tmp_path):
+def test_prompt_contains_glossary_and_translation_memory(tmp_path):
+    glossary = tmp_path / "glossary.json"
+    glossary.write_text(
+        json.dumps({"攻撃UP": "increases Attack"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
     translator = LocalJapaneseEnglishTranslator(
         tmp_path,
-        model_name="google/madlad400-3b-mt",
+        model_name="test-model",
+        glossary_path=glossary,
     )
+    memory_source = "味方全体の攻撃UP"
+    translator.cache[translator.translation_cache_key(memory_source)] = {
+        "source": memory_source,
+        "translation": "Increases all allies' Attack",
+    }
 
-    assert translator._model_input("こんにちは") == "<2en> こんにちは"
+    messages = translator._build_messages(["自分の攻撃UP"])
+
+    assert '"攻撃UP": "increases Attack"' in messages[1]["content"]
+    assert memory_source in messages[1]["content"]
+    assert "Increases all allies' Attack" in messages[1]["content"]
 
 
 def test_translate_texts_uses_cached_values(tmp_path):
     translator = LocalJapaneseEnglishTranslator(tmp_path, model_name="test-model")
     source = "味方全体の攻撃UP"
-    translator.cache[_cache_key(translator.model_name, source)] = {
+    translator.cache[translator.translation_cache_key(source)] = {
         "source": source,
         "translation": "Increases all allies' attack",
     }
@@ -105,3 +120,33 @@ def test_translate_texts_uses_cached_values(tmp_path):
     assert translator.translate_texts([source]) == [
         "Increases all allies' attack"
     ]
+
+
+def test_extract_json_array_accepts_fenced_model_output():
+    output = '```json\n[{"id": 0, "translation": "Massive Fire damage"}]\n```'
+
+    assert _extract_json_array(output) == [
+        {"id": 0, "translation": "Massive Fire damage"}
+    ]
+
+
+def test_glossary_change_invalidates_translation_cache(tmp_path):
+    first_glossary = tmp_path / "first.json"
+    second_glossary = tmp_path / "second.json"
+    first_glossary.write_text('{"攻撃UP": "increases Attack"}', encoding="utf-8")
+    second_glossary.write_text('{"攻撃UP": "Attack Up"}', encoding="utf-8")
+
+    first = LocalJapaneseEnglishTranslator(
+        tmp_path,
+        model_name="test-model",
+        glossary_path=first_glossary,
+    )
+    second = LocalJapaneseEnglishTranslator(
+        tmp_path,
+        model_name="test-model",
+        glossary_path=second_glossary,
+    )
+
+    assert first.translation_cache_key("攻撃UP") != second.translation_cache_key(
+        "攻撃UP"
+    )

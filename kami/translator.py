@@ -1,3 +1,4 @@
+import difflib
 import hashlib
 import json
 import os
@@ -6,8 +7,10 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 
-DEFAULT_MODEL = "google/madlad400-3b-mt"
+DEFAULT_MODEL = "Qwen/Qwen2.5-14B-Instruct-AWQ"
 CACHE_FILE = ".translation_cache.json"
+DEFAULT_GLOSSARY_FILE = Path(__file__).with_name("translation_glossary.json")
+PROMPT_VERSION = "qwen-kamihime-v1"
 JAPANESE_RE = re.compile(r"[\u3040-\u30ff\u3400-\u9fff]")
 SENTENCE_END_RE = re.compile(r"(?<=[。！？\n])")
 ProgressCallback = Callable[[dict[str, Any]], None]
@@ -41,6 +44,21 @@ PRESERVED_VALUE_KEYS = {
     "element",
     "release_date",
 }
+
+SYSTEM_PROMPT = """You are the English localization engine for the game Kamihime Project.
+Translate Japanese game data into concise, natural English.
+
+Consistency is more important than stylistic variety:
+- Always use the supplied glossary exactly for recurring game concepts.
+- Follow translation-memory examples when the same wording or concept appears.
+- Use the same English phrase for the same Japanese effect across every record.
+- Preserve all numbers, percentages, operators, turn notation (for example 3T),
+  level notation, slashes, stars, parentheses, and game abbreviations.
+- Do not explain, summarize, censor, or add information.
+- Transliterate proper names consistently when no established English name is known.
+- Return only a valid JSON array. Each item must contain the original integer "id"
+  and one string field named "translation".
+"""
 
 
 def element_translation_path(data_dir: Path, element: str) -> Path:
@@ -80,12 +98,12 @@ def _read_jsonl(path: Path) -> list[dict]:
     return records
 
 
-def _cache_key(model_name: str, text: str) -> str:
-    value = f"{model_name}\0{text}".encode("utf-8")
+def _cache_key(namespace: str, text: str) -> str:
+    value = f"{namespace}\0{text}".encode("utf-8")
     return hashlib.sha256(value).hexdigest()
 
 
-def _load_cache(path: Path) -> dict[str, dict[str, str]]:
+def _load_json_object(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     try:
@@ -120,11 +138,29 @@ def _chunk_text(text: str, max_chars: int) -> list[str]:
     return chunks
 
 
+def _extract_json_array(text: str) -> list[dict[str, Any]]:
+    cleaned = re.sub(
+        r"^```(?:json)?\s*|\s*```$",
+        "",
+        text.strip(),
+        flags=re.IGNORECASE,
+    )
+    start = cleaned.find("[")
+    end = cleaned.rfind("]")
+    if start < 0 or end < start:
+        raise ValueError("Model response did not contain a JSON array")
+    value = json.loads(cleaned[start : end + 1])
+    if not isinstance(value, list):
+        raise ValueError("Model response JSON was not an array")
+    return [item for item in value if isinstance(item, dict)]
+
+
 class LocalJapaneseEnglishTranslator:
     def __init__(
         self,
         data_dir: Path,
         model_name: str | None = None,
+        glossary_path: Path | None = None,
     ) -> None:
         self.data_dir = data_dir
         self.model_name = (
@@ -133,21 +169,51 @@ class LocalJapaneseEnglishTranslator:
             or DEFAULT_MODEL
         )
         self.batch_size = max(
-            1, int(os.getenv("KAMI_TRANSLATION_BATCH_SIZE", "1"))
-        )
-        self.num_beams = max(
-            1, int(os.getenv("KAMI_TRANSLATION_BEAMS", "4"))
+            1, int(os.getenv("KAMI_TRANSLATION_BATCH_SIZE", "8"))
         )
         self.max_chars = max(
-            80, int(os.getenv("KAMI_TRANSLATION_MAX_CHARS", "350"))
+            80, int(os.getenv("KAMI_TRANSLATION_MAX_CHARS", "500"))
+        )
+        self.max_new_tokens = max(
+            128, int(os.getenv("KAMI_TRANSLATION_MAX_NEW_TOKENS", "2048"))
+        )
+        self.memory_examples = max(
+            0, int(os.getenv("KAMI_TRANSLATION_MEMORY_EXAMPLES", "6"))
+        )
+        self.memory_scan = max(
+            self.memory_examples,
+            int(os.getenv("KAMI_TRANSLATION_MEMORY_SCAN", "500")),
+        )
+        configured_glossary = os.getenv("KAMI_TRANSLATION_GLOSSARY")
+        self.glossary_path = glossary_path or (
+            Path(configured_glossary)
+            if configured_glossary
+            else DEFAULT_GLOSSARY_FILE
+        )
+        self.glossary = {
+            str(key): str(value)
+            for key, value in _load_json_object(self.glossary_path).items()
+        }
+        glossary_fingerprint = hashlib.sha256(
+            json.dumps(
+                self.glossary,
+                ensure_ascii=False,
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()[:16]
+        self.cache_namespace = (
+            f"{self.model_name}:{PROMPT_VERSION}:{glossary_fingerprint}"
         )
         self.cache_path = data_dir / CACHE_FILE
-        self.cache = _load_cache(self.cache_path)
+        self.cache = _load_json_object(self.cache_path)
         self._tokenizer = None
         self._model = None
         self._torch = None
         self._device = "cpu"
         self.device_label = "CPU"
+
+    def translation_cache_key(self, text: str) -> str:
+        return _cache_key(self.cache_namespace, text)
 
     def _resolve_device(self) -> None:
         if self._torch is not None:
@@ -161,12 +227,12 @@ class LocalJapaneseEnglishTranslator:
             ) from exc
 
         requested_device = os.getenv("KAMI_TRANSLATION_DEVICE", "auto").lower()
+        cuda_available = torch.cuda.is_available()
         if requested_device == "auto":
-            self._device = "cuda" if torch.cuda.is_available() else "cpu"
-        elif requested_device == "cuda" and not torch.cuda.is_available():
+            self._device = "cuda" if cuda_available else "cpu"
+        elif requested_device == "cuda" and not cuda_available:
             raise RuntimeError(
-                "KAMI_TRANSLATION_DEVICE=cuda, but CUDA is unavailable. "
-                "Install a CUDA-enabled PyTorch build or use CPU."
+                "KAMI_TRANSLATION_DEVICE=cuda, but CUDA is unavailable"
             )
         elif requested_device not in {"cpu", "cuda"}:
             raise ValueError(
@@ -174,6 +240,12 @@ class LocalJapaneseEnglishTranslator:
             )
         else:
             self._device = requested_device
+
+        if "awq" in self.model_name.casefold() and self._device != "cuda":
+            raise RuntimeError(
+                "The AWQ translation model requires an NVIDIA CUDA GPU. "
+                "Run it on Colab with a GPU runtime."
+            )
 
         self._torch = torch
         if self._device == "cuda":
@@ -191,10 +263,10 @@ class LocalJapaneseEnglishTranslator:
             return
         self._resolve_device()
         try:
-            from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+            from transformers import AutoModelForCausalLM, AutoTokenizer
         except ImportError as exc:
             raise RuntimeError(
-                "Local translation dependencies are missing. "
+                "Qwen translation dependencies are missing. "
                 "Run `uv sync --extra translation`."
             ) from exc
 
@@ -209,21 +281,131 @@ class LocalJapaneseEnglishTranslator:
                     "model": self.model_name,
                 }
             )
-        self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-        model_options: dict[str, Any] = {}
-        if self._device == "cuda":
-            model_options["torch_dtype"] = self._torch.float16
-        self._model = AutoModelForSeq2SeqLM.from_pretrained(
+
+        self._tokenizer = AutoTokenizer.from_pretrained(
             self.model_name,
-            **model_options,
+            use_fast=True,
         )
-        self._model.to(self._device)
+        self._model = AutoModelForCausalLM.from_pretrained(
+            self.model_name,
+            torch_dtype="auto",
+            device_map="auto" if self._device == "cuda" else None,
+            low_cpu_mem_usage=True,
+        )
+        if self._device == "cpu":
+            self._model.to("cpu")
         self._model.eval()
 
-    def _model_input(self, text: str) -> str:
-        if "madlad400" in self.model_name.casefold():
-            return f"<2en> {text}"
-        return text
+    def _cached_translation(self, text: str) -> str | None:
+        entry = self.cache.get(self.translation_cache_key(text))
+        if not isinstance(entry, dict) or entry.get("source") != text:
+            return None
+        translation = entry.get("translation")
+        return translation if isinstance(translation, str) else None
+
+    def _matching_glossary(self, texts: list[str]) -> dict[str, str]:
+        combined = "\n".join(texts)
+        return {
+            source: target
+            for source, target in self.glossary.items()
+            if source in combined
+        }
+
+    def _translation_memory(self, texts: list[str]) -> list[dict[str, str]]:
+        if self.memory_examples == 0:
+            return []
+
+        candidates: list[tuple[float, str, str]] = []
+        entries = list(self.cache.values())[-self.memory_scan :]
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            source = entry.get("source")
+            translation = entry.get("translation")
+            if not isinstance(source, str) or not isinstance(translation, str):
+                continue
+            score = max(
+                difflib.SequenceMatcher(None, source, text).ratio()
+                for text in texts
+            )
+            if score >= 0.45:
+                candidates.append((score, source, translation))
+
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        return [
+            {"Japanese": source, "English": translation}
+            for _score, source, translation in candidates[: self.memory_examples]
+        ]
+
+    def _build_messages(self, texts: list[str]) -> list[dict[str, str]]:
+        payload = [
+            {"id": index, "Japanese": text}
+            for index, text in enumerate(texts)
+        ]
+        user_prompt = (
+            "Canonical glossary:\n"
+            + json.dumps(
+                self._matching_glossary(texts),
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n\nRelevant translation-memory examples:\n"
+            + json.dumps(
+                self._translation_memory(texts),
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n\nTranslate these entries:\n"
+            + json.dumps(payload, ensure_ascii=False, indent=2)
+        )
+        return [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ]
+
+    def _generate_batch(self, texts: list[str]) -> list[str]:
+        messages = self._build_messages(texts)
+        model_inputs = self._tokenizer.apply_chat_template(
+            messages,
+            tokenize=True,
+            add_generation_prompt=True,
+            return_tensors="pt",
+        )
+        model_inputs = model_inputs.to(self._model.device)
+        with self._torch.inference_mode():
+            generated = self._model.generate(
+                model_inputs,
+                max_new_tokens=self.max_new_tokens,
+                do_sample=False,
+                pad_token_id=self._tokenizer.eos_token_id,
+            )
+        output = self._tokenizer.decode(
+            generated[0][model_inputs.shape[-1] :],
+            skip_special_tokens=True,
+        )
+        parsed = _extract_json_array(output)
+        by_id = {
+            item.get("id"): item.get("translation")
+            for item in parsed
+            if isinstance(item.get("id"), int)
+            and isinstance(item.get("translation"), str)
+        }
+        if len(by_id) != len(texts):
+            raise ValueError(
+                f"Model returned {len(by_id)} of {len(texts)} translations"
+            )
+        return [by_id[index].strip() for index in range(len(texts))]
+
+    def _translate_batch(self, texts: list[str]) -> list[str]:
+        try:
+            return self._generate_batch(texts)
+        except (json.JSONDecodeError, ValueError):
+            if len(texts) == 1:
+                raise
+            return [
+                self._generate_batch([text])[0]
+                for text in texts
+            ]
 
     def _translate_missing(
         self,
@@ -254,32 +436,15 @@ class LocalJapaneseEnglishTranslator:
         self._load_model(progress_callback, total, processed)
         for offset in range(0, len(missing), self.batch_size):
             batch = missing[offset : offset + self.batch_size]
-            encoded = self._tokenizer(
-                [self._model_input(text) for text in batch],
-                return_tensors="pt",
-                padding=True,
-                truncation=True,
-                max_length=512,
-            )
-            encoded = {
-                key: value.to(self._device)
-                for key, value in encoded.items()
-            }
-            with self._torch.inference_mode():
-                generated = self._model.generate(
-                    **encoded,
-                    max_new_tokens=512,
-                    num_beams=self.num_beams,
-                )
-            translations = self._tokenizer.batch_decode(
-                generated,
-                skip_special_tokens=True,
-            )
+            translations = self._translate_batch(batch)
             for source, translation in zip(batch, translations):
-                self.cache[_cache_key(self.model_name, source)] = {
+                self.cache[self.translation_cache_key(source)] = {
                     "source": source,
-                    "translation": translation.strip(),
+                    "translation": translation,
+                    "model": self.model_name,
+                    "prompt_version": PROMPT_VERSION,
                 }
+            _atomic_write_json(self.cache_path, self.cache)
             processed += len(batch)
             if progress_callback:
                 progress_callback(
@@ -292,15 +457,6 @@ class LocalJapaneseEnglishTranslator:
                         "model": self.model_name,
                     }
                 )
-
-        _atomic_write_json(self.cache_path, self.cache)
-
-    def _cached_translation(self, text: str) -> str | None:
-        entry = self.cache.get(_cache_key(self.model_name, text))
-        if not isinstance(entry, dict) or entry.get("source") != text:
-            return None
-        translation = entry.get("translation")
-        return translation if isinstance(translation, str) else None
 
     def _translatable_chunks(self, text: str) -> list[str]:
         if not JAPANESE_RE.search(text):
@@ -337,12 +493,11 @@ class LocalJapaneseEnglishTranslator:
     def _translate_text(self, text: str) -> str:
         if not JAPANESE_RE.search(text):
             return text
-        chunks = _chunk_text(text, self.max_chars)
         return "".join(
             self._cached_translation(chunk) or chunk
             if JAPANESE_RE.search(chunk)
             else chunk
-            for chunk in chunks
+            for chunk in _chunk_text(text, self.max_chars)
         )
 
     def _translate_value(
@@ -356,13 +511,11 @@ class LocalJapaneseEnglishTranslator:
                 translated_key = KEY_TRANSLATIONS.get(key)
                 if translated_key is None:
                     translated_key = self._translate_text(key)
-                if key in PRESERVED_VALUE_KEYS:
-                    translated[translated_key] = child
-                else:
-                    translated[translated_key] = self._translate_value(
-                        child,
-                        key,
-                    )
+                translated[translated_key] = (
+                    child
+                    if key in PRESERVED_VALUE_KEYS
+                    else self._translate_value(child, key)
+                )
             return translated
         if isinstance(value, list):
             return [
@@ -389,10 +542,7 @@ class LocalJapaneseEnglishTranslator:
             self.collect_texts(records),
             progress_callback,
         )
-        return [
-            self._translate_value(record)
-            for record in records
-        ]
+        return [self._translate_value(record) for record in records]
 
     def translate_texts(
         self,

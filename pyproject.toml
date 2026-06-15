@@ -16,8 +16,7 @@ dependencies = [
 [project.optional-dependencies]
 translation = [
     "accelerate>=1.2,<2",
-    "sacremoses>=0.1,<1",
-    "sentencepiece>=0.2,<1",
+    "autoawq>=0.2.7,<0.3; sys_platform == 'linux'",
     "torch>=2.2,<3",
     "transformers>=4.48,<5",
 ]

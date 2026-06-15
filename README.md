@@ -30,18 +30,39 @@ KAMI_ELEMENTS=fire,water,wind,thunder,light,dark
 Configure local translation with:
 
 ```dotenv
-KAMI_TRANSLATION_MODEL=google/madlad400-3b-mt
-KAMI_TRANSLATION_DEVICE=auto
-KAMI_TRANSLATION_BATCH_SIZE=1
-KAMI_TRANSLATION_MAX_CHARS=350
-KAMI_TRANSLATION_BEAMS=4
+KAMI_TRANSLATION_MODEL=Qwen/Qwen2.5-14B-Instruct-AWQ
+KAMI_TRANSLATION_DEVICE=cuda
+KAMI_TRANSLATION_BATCH_SIZE=8
+KAMI_TRANSLATION_MAX_CHARS=500
+KAMI_TRANSLATION_MAX_NEW_TOKENS=2048
+KAMI_TRANSLATION_MEMORY_EXAMPLES=6
+KAMI_TRANSLATION_MEMORY_SCAN=500
 ```
 
-`KAMI_TRANSLATION_DEVICE=auto` uses CUDA when available and otherwise runs on
-the CPU. Translation results are cached by source text, so later latest updates
-only invoke the model for new or changed Japanese text. During translation,
-the element page displays the selected CPU/GPU, model name, translated chunk
-count, percentage, and a progress bar.
+The translator uses `Qwen/Qwen2.5-14B-Instruct-AWQ` and requires an NVIDIA CUDA
+GPU on Linux. AutoAWQ depends on Triton, which does not provide Windows wheels.
+A Colab T4 runtime can run the quantized model. Translation is deterministic
+and processes multiple data points in one JSON batch.
+
+Consistency is enforced by:
+
+- `kami/translation_glossary.json`, which defines canonical Kamihime terms.
+- A versioned cache that reuses exact translations.
+- Relevant translation-memory examples injected into later prompts.
+- A shared system prompt that prohibits stylistic variation for recurring
+  effects.
+
+Changing the glossary automatically invalidates affected cache namespace
+instead of silently reusing output generated under the old terminology.
+During translation, the element page displays GPU, model name, translated
+chunk count, percentage, and a progress bar.
+
+For Google Colab, select a GPU runtime and install the translation extra:
+
+```bash
+!pip install uv
+!uv sync --extra translation
+```
 
 Test a small translation sample without rebuilding or overwriting the English
 element files:
@@ -115,7 +136,8 @@ KamiWiki/
 |   |-- pipeline.py             # Runs latest/full updates in the background
 |   |-- data_store.py           # Loads, normalizes, filters, and finds characters
 |   |-- data_loader.py          # Generic JSONL record iterator
-|   |-- translator.py           # Local translation and text cache
+|   |-- translator.py           # Qwen AWQ translation and translation memory
+|   |-- translation_glossary.json # Canonical English game terminology
 |   |-- build_index.py          # Optional FAISS/RAG index builder
 |   |-- kamihime_raw.jsonl      # Legacy combined raw-data fallback
 |   |-- all_kami_data.jsonl     # Legacy JSONL data fallback
