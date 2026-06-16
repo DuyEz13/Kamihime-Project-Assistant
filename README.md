@@ -86,6 +86,46 @@ exact sync so the incompatible Transformers version is removed:
 
 The expected versions are `2.6.0` and `4.51.3`.
 
+### DeepL API alternative
+
+DeepL API Free currently includes up to 500,000 translated source characters
+per month. To test DeepL without removing the Qwen pipeline:
+
+```powershell
+uv sync --extra deepl
+```
+
+Set the provider and API key in `.env`:
+
+```dotenv
+KAMI_TRANSLATION_PROVIDER=deepl
+DEEPL_AUTH_KEY=your_deepl_api_key
+DEEPL_MODEL_TYPE=prefer_quality_optimized
+DEEPL_TRANSLATION_BATCH_SIZE=50
+DEEPL_REQUIRE_GLOSSARY=1
+```
+
+Test a few values before running a full update:
+
+```powershell
+uv run python scripts/test_translation.py --provider deepl --element fire --count 5
+```
+
+The DeepL backend:
+
+- Uses a separate cache namespace, so cached Qwen results are never mixed in.
+- Sends text in batches and only bills uncached source text.
+- Automatically creates and reuses a versioned JA-EN glossary from
+  `kami/translation_glossary.json`.
+- Sends matching canonical terms as unbilled translation context.
+- Prints current character usage after the test.
+
+Add or correct game terminology in `kami/translation_glossary.json`. For
+example, the default glossary fixes `ニケ` as `Nike` and `レイジング状態` as
+`Raging state`. If automatic glossary creation is unavailable for the account,
+set `DEEPL_GLOSSARY_ID` to an existing multilingual glossary ID. Set
+`DEEPL_REQUIRE_GLOSSARY=0` only when testing without terminology enforcement.
+
 Test a small translation sample without rebuilding or overwriting the English
 element files:
 

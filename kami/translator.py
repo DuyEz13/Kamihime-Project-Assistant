@@ -8,6 +8,7 @@ from typing import Any, Callable, Iterable
 
 
 DEFAULT_MODEL = "Qwen/Qwen2.5-14B-Instruct-AWQ"
+DEFAULT_PROVIDER = "qwen"
 SUPPORTED_TORCH_VERSION = "2.6.0"
 SUPPORTED_TRANSFORMERS_VERSION = "4.51.3"
 CACHE_FILE = ".translation_cache.json"
@@ -435,7 +436,6 @@ class LocalJapaneseEnglishTranslator:
         ]
         total = len(unique_texts)
         processed = total - len(missing)
-        self._resolve_device()
         if progress_callback:
             progress_callback(
                 {
@@ -450,6 +450,7 @@ class LocalJapaneseEnglishTranslator:
         if not missing:
             return
 
+        self._resolve_device()
         self._load_model(progress_callback, total, processed)
         for offset in range(0, len(missing), self.batch_size):
             batch = missing[offset : offset + self.batch_size]
@@ -582,12 +583,215 @@ class LocalJapaneseEnglishTranslator:
         return len(translated)
 
 
+class DeepLJapaneseEnglishTranslator(LocalJapaneseEnglishTranslator):
+    def __init__(
+        self,
+        data_dir: Path,
+        glossary_path: Path | None = None,
+    ) -> None:
+        self.model_type = os.getenv(
+            "DEEPL_MODEL_TYPE",
+            "prefer_quality_optimized",
+        )
+        super().__init__(
+            data_dir,
+            model_name=f"deepl-api:{self.model_type}",
+            glossary_path=glossary_path,
+        )
+        self.batch_size = max(
+            1, int(os.getenv("DEEPL_TRANSLATION_BATCH_SIZE", "50"))
+        )
+        self.device_label = "DeepL API"
+        self._client = None
+        self._deepl_glossary = None
+
+    def _resolve_device(self) -> None:
+        self._device = "api"
+        self.device_label = "DeepL API"
+
+    def _load_client(self) -> None:
+        if self._client is not None:
+            return
+        auth_key = os.getenv("DEEPL_AUTH_KEY")
+        if not auth_key:
+            raise RuntimeError(
+                "Set DEEPL_AUTH_KEY before using the DeepL provider"
+            )
+        try:
+            import deepl
+        except ImportError as exc:
+            raise RuntimeError(
+                "The DeepL SDK is missing. Run `uv sync --extra deepl`."
+            ) from exc
+        self._client = deepl.DeepLClient(auth_key)
+
+    def _ensure_glossary(self) -> Any | None:
+        if self._deepl_glossary is not None:
+            return self._deepl_glossary
+        configured_id = os.getenv("DEEPL_GLOSSARY_ID")
+        if configured_id:
+            self._deepl_glossary = configured_id
+            return configured_id
+        if not self.glossary:
+            return None
+
+        self._load_client()
+        try:
+            from deepl.api_data import (
+                MultilingualGlossaryDictionaryEntries,
+            )
+
+            glossary_name = (
+                "KamiWiki JA-EN "
+                + self.cache_namespace.rsplit(":", 1)[-1]
+            )
+            for glossary in self._client.list_multilingual_glossaries():
+                if glossary.name == glossary_name:
+                    self._deepl_glossary = glossary
+                    return glossary
+
+            dictionary = MultilingualGlossaryDictionaryEntries(
+                "JA",
+                "EN",
+                self.glossary,
+            )
+            self._deepl_glossary = (
+                self._client.create_multilingual_glossary(
+                    glossary_name,
+                    [dictionary],
+                )
+            )
+            return self._deepl_glossary
+        except Exception as exc:
+            if os.getenv("DEEPL_REQUIRE_GLOSSARY", "1") != "0":
+                raise RuntimeError(
+                    "Could not create or access the DeepL JA-EN glossary. "
+                    "Set DEEPL_GLOSSARY_ID to an existing glossary or "
+                    "DEEPL_REQUIRE_GLOSSARY=0 to continue without one."
+                ) from exc
+            return None
+
+    def _deepl_context(self, texts: list[str]) -> str:
+        matching = self._matching_glossary(texts)
+        terms = "; ".join(
+            f"{source} means {target}"
+            for source, target in matching.items()
+        )
+        base = (
+            "Kamihime Project game localization. Use consistent terminology "
+            "for character names, combat states, buffs, debuffs, abilities, "
+            "Burst effects, and turn notation."
+        )
+        return f"{base} Canonical terms: {terms}" if terms else base
+
+    def _translate_missing(
+        self,
+        texts: list[str],
+        progress_callback: ProgressCallback | None = None,
+    ) -> None:
+        unique_texts = list(dict.fromkeys(texts))
+        missing = [
+            text for text in unique_texts if not self._cached_translation(text)
+        ]
+        total = len(unique_texts)
+        processed = total - len(missing)
+        self._resolve_device()
+        if progress_callback:
+            progress_callback(
+                {
+                    "phase": "preparing",
+                    "progress": round(processed * 100 / total) if total else 100,
+                    "processed": processed,
+                    "total": total,
+                    "device": self.device_label,
+                    "model": self.model_name,
+                }
+            )
+        if not missing:
+            return
+
+        self._load_client()
+        glossary = self._ensure_glossary()
+        for offset in range(0, len(missing), self.batch_size):
+            batch = missing[offset : offset + self.batch_size]
+            options: dict[str, Any] = {
+                "source_lang": "JA",
+                "target_lang": "EN-US",
+                "preserve_formatting": True,
+                "context": self._deepl_context(batch),
+                "model_type": self.model_type,
+            }
+            if glossary is not None:
+                options["glossary"] = glossary
+            results = self._client.translate_text(batch, **options)
+            if not isinstance(results, list):
+                results = [results]
+            if len(results) != len(batch):
+                raise RuntimeError(
+                    f"DeepL returned {len(results)} of {len(batch)} translations"
+                )
+            for source, result in zip(batch, results):
+                self.cache[self.translation_cache_key(source)] = {
+                    "source": source,
+                    "translation": result.text.strip(),
+                    "model": self.model_name,
+                    "provider": "deepl",
+                }
+            _atomic_write_json(self.cache_path, self.cache)
+            processed += len(batch)
+            if progress_callback:
+                progress_callback(
+                    {
+                        "phase": "translating",
+                        "progress": round(processed * 100 / total),
+                        "processed": processed,
+                        "total": total,
+                        "device": self.device_label,
+                        "model": self.model_name,
+                    }
+                )
+
+    def usage(self) -> dict[str, int | None]:
+        self._load_client()
+        usage = self._client.get_usage()
+        if not usage.character.valid:
+            return {"count": None, "limit": None}
+        return {
+            "count": usage.character.count,
+            "limit": usage.character.limit,
+        }
+
+
+def create_translator(
+    data_dir: Path,
+    provider: str | None = None,
+    model_name: str | None = None,
+) -> LocalJapaneseEnglishTranslator:
+    selected = (
+        provider
+        or os.getenv("KAMI_TRANSLATION_PROVIDER")
+        or DEFAULT_PROVIDER
+    ).strip().lower()
+    if selected == "qwen":
+        return LocalJapaneseEnglishTranslator(
+            data_dir,
+            model_name=model_name,
+        )
+    if selected == "deepl":
+        if model_name:
+            raise ValueError("--model is only supported by the qwen provider")
+        return DeepLJapaneseEnglishTranslator(data_dir)
+    raise ValueError(
+        "KAMI_TRANSLATION_PROVIDER must be 'qwen' or 'deepl'"
+    )
+
+
 def translate_elements(
     data_dir: Path,
     elements: Iterable[str],
     progress_callback: ProgressCallback | None = None,
 ) -> dict[str, int]:
-    translator = LocalJapaneseEnglishTranslator(data_dir)
+    translator = create_translator(data_dir)
     element_records: dict[str, list[dict]] = {}
     all_texts: list[str] = []
     normalized_elements = [element.strip().lower() for element in elements]
@@ -617,5 +821,5 @@ def translate_elements(
 
 def translate_jsonl(source: Path, destination: Path) -> int:
     """Translate a JSONL file locally for backward compatibility."""
-    translator = LocalJapaneseEnglishTranslator(destination.parent)
+    translator = create_translator(destination.parent)
     return translator.translate_file(source, destination)

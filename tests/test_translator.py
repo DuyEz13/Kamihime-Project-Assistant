@@ -1,11 +1,13 @@
 import json
 
 from kami.translator import (
+    DeepLJapaneseEnglishTranslator,
     KEY_TRANSLATIONS,
     LocalJapaneseEnglishTranslator,
     SUPPORTED_TORCH_VERSION,
     SUPPORTED_TRANSFORMERS_VERSION,
     _extract_json_array,
+    create_translator,
 )
 
 
@@ -157,3 +159,55 @@ def test_glossary_change_invalidates_translation_cache(tmp_path):
 def test_autoawq_compatibility_versions_are_pinned():
     assert SUPPORTED_TORCH_VERSION == "2.6.0"
     assert SUPPORTED_TRANSFORMERS_VERSION == "4.51.3"
+
+
+def test_create_translator_selects_deepl_provider(tmp_path):
+    translator = create_translator(tmp_path, provider="deepl")
+
+    assert isinstance(translator, DeepLJapaneseEnglishTranslator)
+    assert translator.device_label == "DeepL API"
+    assert translator.model_name.startswith("deepl-api:")
+
+
+def test_deepl_and_qwen_use_separate_cache_namespaces(tmp_path):
+    qwen = create_translator(tmp_path, provider="qwen", model_name="test-model")
+    deepl = create_translator(tmp_path, provider="deepl")
+
+    assert qwen.translation_cache_key("ニケ") != deepl.translation_cache_key(
+        "ニケ"
+    )
+
+
+def test_deepl_requires_auth_key(tmp_path, monkeypatch):
+    monkeypatch.delenv("DEEPL_AUTH_KEY", raising=False)
+    translator = DeepLJapaneseEnglishTranslator(tmp_path)
+
+    try:
+        translator._load_client()
+    except RuntimeError as exc:
+        assert "DEEPL_AUTH_KEY" in str(exc)
+    else:
+        raise AssertionError("DeepL client should require an API key")
+
+
+def test_deepl_translates_batch_and_caches_results(tmp_path):
+    class Result:
+        def __init__(self, text):
+            self.text = text
+
+    class Client:
+        def translate_text(self, texts, **options):
+            assert options["source_lang"] == "JA"
+            assert options["target_lang"] == "EN-US"
+            assert options["glossary"] == "glossary-id"
+            return [Result("Nike"), Result("Raging state")]
+
+    translator = DeepLJapaneseEnglishTranslator(tmp_path)
+    translator._client = Client()
+    translator._deepl_glossary = "glossary-id"
+
+    translated = translator.translate_texts(["ニケ", "レイジング状態"])
+
+    assert translated == ["Nike", "Raging state"]
+    assert translator._cached_translation("ニケ") == "Nike"
+    assert translator._cached_translation("レイジング状態") == "Raging state"

@@ -44,7 +44,7 @@ def _translation_progress(progress: dict) -> None:
         message = "Checking the translation cache..."
     else:
         message = (
-            f"Translating locally on {progress['device']}: "
+            f"Translating with {progress['device']}: "
             f"{progress['processed']}/{progress['total']} text chunks"
         )
     _set_status(
@@ -74,7 +74,7 @@ def _run_update(mode: str) -> None:
             _set_status(
                 state="translating",
                 mode=mode,
-                message="Translating updated element data locally...",
+                message="Translating updated element data...",
                 progress=0,
             )
             translated = translate_elements(
@@ -98,7 +98,7 @@ def _run_update(mode: str) -> None:
             _set_status(
                 state="translating",
                 mode=mode,
-                message="Translating the rebuilt database locally...",
+                message="Translating the rebuilt database...",
                 progress=0,
             )
             translated = translate_elements(
@@ -111,7 +111,7 @@ def _run_update(mode: str) -> None:
                 f"{element}: {count}" for element, count in counts.items()
             )
             message = (
-                f"Database update completed and translated locally: {summary}"
+                f"Database update completed and translated: {summary}"
             )
         else:
             raise ValueError(f"Unknown update mode: {mode}")

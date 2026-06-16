@@ -14,7 +14,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from kami.translator import LocalJapaneseEnglishTranslator  # noqa: E402
+from kami.translator import create_translator  # noqa: E402
 
 
 DATA_DIR = ROOT_DIR / "kami" / "data"
@@ -47,7 +47,7 @@ def _progress(status: dict) -> None:
 
 
 def _sample_texts(
-    translator: LocalJapaneseEnglishTranslator,
+    translator,
     element: str,
     count: int,
     seed: int,
@@ -97,8 +97,13 @@ def main() -> int:
         help="Japanese text to translate. Repeat for multiple values.",
     )
     parser.add_argument(
+        "--provider",
+        choices=("qwen", "deepl"),
+        help="Translation provider. Defaults to KAMI_TRANSLATION_PROVIDER.",
+    )
+    parser.add_argument(
         "--model",
-        help="Override KAMI_TRANSLATION_MODEL for this test.",
+        help="Override KAMI_TRANSLATION_MODEL for the qwen provider.",
     )
     parser.add_argument(
         "--device",
@@ -114,8 +119,9 @@ def main() -> int:
     if args.device:
         os.environ["KAMI_TRANSLATION_DEVICE"] = args.device
 
-    translator = LocalJapaneseEnglishTranslator(
+    translator = create_translator(
         DATA_DIR,
+        provider=args.provider,
         model_name=args.model,
     )
     source_texts = args.text or _sample_texts(
@@ -128,6 +134,12 @@ def main() -> int:
     print(f"Model: {translator.model_name}")
     translations = translator.translate_texts(source_texts, _progress)
     print(f"Device: {translator.device_label}")
+    if hasattr(translator, "usage"):
+        usage = translator.usage()
+        print(
+            "DeepL usage: "
+            f"{usage['count']}/{usage['limit']} source characters"
+        )
 
     for index, (source, translated) in enumerate(
         zip(source_texts, translations),
