@@ -40,51 +40,7 @@ KAMI_TRANSLATION_MEMORY_SCAN=500
 ```
 
 The translator uses `Qwen/Qwen2.5-14B-Instruct-AWQ` and requires an NVIDIA CUDA
-GPU on Linux. AutoAWQ depends on Triton, which does not provide Windows wheels.
-A Colab T4 runtime can run the quantized model. Translation is deterministic
-and processes multiple data points in one JSON batch.
-
-AutoAWQ is deprecated and only supports a narrow dependency range. The
-translation extra intentionally pins the last tested stack:
-
-- `autoawq==0.2.9`
-- `torch==2.6.0`
-- `transformers==4.51.3`
-
-Do not upgrade Transformers independently. Newer releases remove activation
-classes that AutoAWQ still imports and cause errors such as
-`cannot import name 'PytorchGELUTanh'`.
-
-Consistency is enforced by:
-
-- `kami/translation_glossary.json`, which defines canonical Kamihime terms.
-- A versioned cache that reuses exact translations.
-- Relevant translation-memory examples injected into later prompts.
-- A shared system prompt that prohibits stylistic variation for recurring
-  effects.
-
-Changing the glossary automatically invalidates affected cache namespace
-instead of silently reusing output generated under the old terminology.
-During translation, the element page displays GPU, model name, translated
-chunk count, percentage, and a progress bar.
-
-For Google Colab, select a GPU runtime and install the translation extra:
-
-```bash
-!pip install uv
-!uv sync --extra translation
-```
-
-After changing an existing Colab environment, recreate `.venv` or force an
-exact sync so the incompatible Transformers version is removed:
-
-```bash
-!rm -rf .venv
-!uv sync --extra translation
-!uv run python -c "import torch, transformers; print(torch.__version__, transformers.__version__)"
-```
-
-The expected versions are `2.6.0` and `4.51.3`.
+GPU on Linux.
 
 ### DeepL API alternative
 
@@ -118,17 +74,8 @@ dropdown, then click **Translate Database**. This reads the existing
 `kami/data/translated/kamihime_*_en.jsonl` files only after translation
 succeeds.
 
-The DeepL backend:
-
-- Uses a separate cache namespace, so cached Qwen results are never mixed in.
-- Sends text in batches and only bills uncached source text.
-- Automatically creates and reuses a versioned JA-EN glossary from
-  `kami/translation_glossary.json`.
-- Sends matching canonical terms as unbilled translation context.
-- Prints current character usage after the test.
-
 Add or correct game terminology in `kami/translation_glossary.json`. For
-example, the default glossary fixes `ニケ` as `Nike` and `レイジング状態` as
+example, the default glossary fixes `レイジング状態` as
 `Raging state`. If automatic glossary creation is unavailable for the account,
 set `DEEPL_GLOSSARY_ID` to an existing multilingual glossary ID. Set
 `DEEPL_REQUIRE_GLOSSARY=0` only when testing without terminology enforcement.
