@@ -1,4 +1,6 @@
 import copy
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 import json
 import os
 import random
@@ -6,10 +8,13 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import Any, Callable
 from urllib.parse import urljoin
 
 import httpx
 from bs4 import BeautifulSoup
+
+from .paths import element_raw_path
 
 
 DEFAULT_SOURCE_URL = {
@@ -20,6 +25,56 @@ DEFAULT_SOURCE_URL = {
     "light": "https://wikiwiki.jp/kamiprodb/%E7%A5%9E%E5%A7%AB/SSR/%E5%85%89",
     "dark": "https://wikiwiki.jp/kamiprodb/%E7%A5%9E%E5%A7%AB/SSR/%E9%97%87",
 }
+
+ProgressCallback = Callable[[dict[str, Any]], None]
+
+
+def _env_int(name: str, default: int, minimum: int = 0) -> int:
+    try:
+        return max(minimum, int(os.getenv(name, str(default))))
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
+    try:
+        return max(minimum, float(os.getenv(name, str(default))))
+    except ValueError:
+        return default
+
+
+def _retry_after_seconds(value: str | None) -> float | None:
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        pass
+
+    try:
+        parsed = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return max(0.0, (parsed - datetime.now(timezone.utc)).total_seconds())
+
+
+def _retry_delay_seconds(response: httpx.Response, attempt: int) -> float:
+    retry_after = _retry_after_seconds(response.headers.get("Retry-After"))
+    base = _env_float("KAMI_HTTP_BACKOFF_BASE", 4.0)
+    maximum = _env_float("KAMI_HTTP_BACKOFF_MAX", 180.0)
+    jitter_ratio = _env_float("KAMI_HTTP_BACKOFF_JITTER", 0.35)
+    cooldown_429 = _env_float("KAMI_HTTP_429_COOLDOWN", 45.0)
+
+    exponential = base * (2 ** attempt)
+    if response.status_code == 429:
+        exponential = max(exponential, cooldown_429)
+    delay = retry_after if retry_after is not None else exponential
+    delay = min(delay, maximum)
+    if jitter_ratio:
+        delay += random.uniform(0, delay * jitter_ratio)
+    return delay
 
 
 def _atomic_write_jsonl(records: list[dict], destination: Path) -> None:
@@ -67,11 +122,8 @@ class KamihimeCrawler:
         self.client.close()
 
     def _get_soup(self, url: str) -> BeautifulSoup:
-        max_attempts = max(1, int(os.getenv("KAMI_HTTP_RETRIES", "5")))
-        request_interval = max(
-            0.0,
-            float(os.getenv("KAMI_REQUEST_INTERVAL", "0.4")),
-        )
+        max_attempts = _env_int("KAMI_HTTP_RETRIES", 8, minimum=1)
+        request_interval = _env_float("KAMI_REQUEST_INTERVAL", 1.2)
 
         for attempt in range(max_attempts):
             with self._request_lock:
@@ -83,10 +135,12 @@ class KamihimeCrawler:
 
             if response.status_code == 429 or response.status_code >= 500:
                 if attempt == max_attempts - 1:
-                    response.raise_for_status()
-                retry_after = response.headers.get("Retry-After")
-                delay = float(retry_after) if retry_after else 2 ** (attempt + 1)
-                time.sleep(min(delay, 30))
+                    raise RuntimeError(
+                        f"HTTP {response.status_code} after {max_attempts} "
+                        f"attempts while fetching {url}"
+                    ) from None
+                delay = _retry_delay_seconds(response, attempt)
+                time.sleep(delay)
                 continue
 
             response.raise_for_status()
@@ -245,8 +299,8 @@ class KamihimeCrawler:
         return result
 
     def crawl_character(self, character: dict[str, str]) -> dict:
-        delay_min = float(os.getenv("KAMI_CRAWL_DELAY_MIN", "0.1"))
-        delay_max = float(os.getenv("KAMI_CRAWL_DELAY_MAX", "0.3"))
+        delay_min = _env_float("KAMI_CRAWL_DELAY_MIN", 0.8)
+        delay_max = _env_float("KAMI_CRAWL_DELAY_MAX", 1.6)
         if delay_max > 0:
             time.sleep(random.uniform(delay_min, max(delay_min, delay_max)))
         soup = self._get_soup(character["link"])
@@ -280,27 +334,55 @@ class KamihimeCrawler:
         info["acquisition_method"] = character["acquisition_method"]
         return updated
 
-    def crawl(self, links: list[dict[str, str]] | None = None) -> list[dict]:
+    def crawl(
+        self,
+        links: list[dict[str, str]] | None = None,
+        progress_callback: ProgressCallback | None = None,
+    ) -> list[dict]:
         links = links or self.extract_character_links()
         unique_characters = {
             character["link"]: character
             for character in links
         }
-        workers = max(1, int(os.getenv("KAMI_CRAWL_WORKERS", "4")))
+        workers = _env_int("KAMI_CRAWL_WORKERS", 1, minimum=1)
         record_cache: dict[str, dict] = {}
+        total = len(unique_characters)
+        completed = 0
+
+        def report(character: dict[str, str] | None = None) -> None:
+            if progress_callback is None:
+                return
+            progress_callback(
+                {
+                    "processed": completed,
+                    "total": total,
+                    "character": character.get("name", "") if character else "",
+                    "url": character.get("link", "") if character else "",
+                }
+            )
+
+        report()
 
         if workers == 1:
             for url, character in unique_characters.items():
                 record_cache[url] = self.crawl_character(character)
+                completed += 1
+                report(character)
         else:
             with ThreadPoolExecutor(max_workers=workers) as executor:
                 futures = {
                     executor.submit(self.crawl_character, character): url
                     for url, character in unique_characters.items()
                 }
+                characters_by_url = {
+                    character["link"]: character
+                    for character in unique_characters.values()
+                }
                 for future in as_completed(futures):
                     url = futures[future]
                     record_cache[url] = future.result()
+                    completed += 1
+                    report(characters_by_url.get(url))
 
         records = []
         for character in links:
@@ -314,13 +396,14 @@ class KamihimeCrawler:
 
 
 def element_data_path(data_dir: Path, element: str) -> Path:
-    return data_dir / f"kamihime_{element}_raw.jsonl"
+    return element_raw_path(data_dir, element)
 
 
 def crawl_element_to_jsonl(
     element: str,
     data_dir: Path,
     source_url: str | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> int:
     element = element.strip().lower()
     if element not in DEFAULT_SOURCE_URL:
@@ -334,7 +417,13 @@ def crawl_element_to_jsonl(
         headless=os.getenv("KAMI_HEADLESS", "1") != "0",
     )
     try:
-        records = crawler.crawl()
+        links = crawler.extract_character_links()
+
+        def report(progress: dict[str, Any]) -> None:
+            if progress_callback:
+                progress_callback({"element": element, **progress})
+
+        records = crawler.crawl(links, report)
     finally:
         crawler.close()
 
@@ -356,6 +445,7 @@ def update_element_latest(
     element: str,
     data_dir: Path,
     source_url: str | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> dict[str, int]:
     element = element.strip().lower()
     if element not in DEFAULT_SOURCE_URL:
@@ -387,6 +477,27 @@ def update_element_latest(
         new_entries = 0
         crawled_details = 0
         new_detail_cache: dict[str, dict] = {}
+        new_detail_links = {
+            entry["link"]
+            for entry in entries
+            if (entry["link"], entry["name"]) not in existing_by_identity
+            and entry["link"] not in existing_by_url
+        }
+        total_details = len(new_detail_links)
+
+        def report(entry: dict[str, str] | None = None) -> None:
+            if progress_callback:
+                progress_callback(
+                    {
+                        "element": element,
+                        "processed": crawled_details,
+                        "total": total_details,
+                        "character": entry.get("name", "") if entry else "",
+                        "url": entry.get("link", "") if entry else "",
+                    }
+                )
+
+        report()
 
         for entry in entries:
             identity = (entry["link"], entry["name"])
@@ -399,6 +510,7 @@ def update_element_latest(
                     if entry["link"] not in new_detail_cache:
                         new_detail_cache[entry["link"]] = crawler.crawl_character(entry)
                         crawled_details += 1
+                        report(entry)
                     base_record = new_detail_cache[entry["link"]]
 
             record = crawler.apply_list_metadata(base_record, entry)
@@ -421,26 +533,42 @@ def update_element_latest(
     }
 
 
-def crawl_all_elements(data_dir: Path) -> dict[str, int]:
+def configured_elements() -> list[str]:
     configured = os.getenv("KAMI_ELEMENTS", ",".join(DEFAULT_SOURCE_URL))
     elements = [value.strip().lower() for value in configured.split(",") if value.strip()]
     if not elements:
         raise ValueError("KAMI_ELEMENTS must contain at least one element")
+    return elements
+
+
+def crawl_all_elements(
+    data_dir: Path,
+    progress_callback: ProgressCallback | None = None,
+) -> dict[str, int]:
+    elements = configured_elements()
 
     counts: dict[str, int] = {}
     for element in elements:
-        counts[element] = crawl_element_to_jsonl(element, data_dir)
+        counts[element] = crawl_element_to_jsonl(
+            element,
+            data_dir,
+            progress_callback=progress_callback,
+        )
     return counts
 
 
-def update_all_elements_latest(data_dir: Path) -> dict[str, dict[str, int]]:
-    configured = os.getenv("KAMI_ELEMENTS", ",".join(DEFAULT_SOURCE_URL))
-    elements = [value.strip().lower() for value in configured.split(",") if value.strip()]
-    if not elements:
-        raise ValueError("KAMI_ELEMENTS must contain at least one element")
+def update_all_elements_latest(
+    data_dir: Path,
+    progress_callback: ProgressCallback | None = None,
+) -> dict[str, dict[str, int]]:
+    elements = configured_elements()
 
     return {
-        element: update_element_latest(element, data_dir)
+        element: update_element_latest(
+            element,
+            data_dir,
+            progress_callback=progress_callback,
+        )
         for element in elements
     }
 

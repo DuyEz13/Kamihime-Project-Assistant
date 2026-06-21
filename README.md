@@ -88,8 +88,8 @@ The expected versions are `2.6.0` and `4.51.3`.
 
 ### DeepL API alternative
 
-DeepL API Free currently includes up to 500,000 translated source characters
-per month. To test DeepL without removing the Qwen pipeline:
+DeepL API Free currently includes up to 1,000,000 translated source characters
+per account. To test DeepL without removing the Qwen pipeline:
 
 ```powershell
 uv sync --extra deepl
@@ -110,6 +110,13 @@ Test a few values before running a full update:
 ```powershell
 uv run python scripts/test_translation.py --provider deepl --element fire --count 5
 ```
+
+To translate the existing Japanese database without crawling the source wiki
+again, open an element page, choose **DeepL** or **Qwen** from the provider
+dropdown, then click **Translate Database**. This reads the existing
+`kami/data/raw/kamihime_*_raw.jsonl` files and rewrites the corresponding
+`kami/data/translated/kamihime_*_en.jsonl` files only after translation
+succeeds.
 
 The DeepL backend:
 
@@ -142,11 +149,26 @@ uv run python scripts/test_translation.py `
 Individual source URLs can be overridden with environment variables such as
 `KAMI_SOURCE_URL_FIRE` or `KAMI_SOURCE_URL_WATER`.
 
-Full database crawling uses four concurrent detail requests by default. Adjust
-`KAMI_CRAWL_WORKERS`, `KAMI_CRAWL_DELAY_MIN`, and `KAMI_CRAWL_DELAY_MAX` if the
-source site requires a slower request rate. `KAMI_REQUEST_INTERVAL` applies a
-global delay between requests, and HTTP 429/5xx responses are retried with
-backoff according to `KAMI_HTTP_RETRIES`.
+Full database crawling is intentionally conservative because the source wiki
+can return HTTP 429 when requests arrive too quickly. The default setup uses
+one detail worker, a global request interval, randomized per-character delay,
+and exponential backoff with jitter:
+
+```dotenv
+KAMI_CRAWL_WORKERS=1
+KAMI_CRAWL_DELAY_MIN=0.8
+KAMI_CRAWL_DELAY_MAX=1.6
+KAMI_REQUEST_INTERVAL=1.2
+KAMI_HTTP_RETRIES=8
+KAMI_HTTP_BACKOFF_BASE=4
+KAMI_HTTP_BACKOFF_MAX=180
+KAMI_HTTP_BACKOFF_JITTER=0.35
+KAMI_HTTP_429_COOLDOWN=45
+```
+
+If the wiki still returns 429, increase `KAMI_REQUEST_INTERVAL` and
+`KAMI_HTTP_429_COOLDOWN` before increasing workers. `Retry-After` headers are
+honored when the site provides them.
 
 ## Run
 
@@ -172,9 +194,11 @@ The element pages provide two update modes:
   translated element files.
 
 Existing element files are replaced atomically only after an update succeeds.
-Raw crawl output is stored as `kamihime_<element>_raw.jsonl`; translated output
-is stored as `kamihime_<element>_en.jsonl`. The web application prefers each
-English file and falls back to its raw file until translation is available.
+Raw crawl output is stored under `kami/data/raw/` as
+`kamihime_<element>_raw.jsonl`; translated output is stored under
+`kami/data/translated/` as `kamihime_<element>_en.jsonl`. The web application
+prefers each English file and falls back to its raw file until translation is
+available.
 
 ## Project Structure
 
@@ -192,12 +216,16 @@ KamiWiki/
 |       `-- character.html       # Character information and skill page
 |-- kami/
 |   |-- data/
-|   |   |-- kamihime_*_raw.jsonl # Japanese crawl data, split by element
-|   |   `-- kamihime_*_en.jsonl  # Locally translated data rendered by the web
+|   |   |-- raw/
+|   |   |   `-- kamihime_*_raw.jsonl # Japanese crawl data, split by element
+|   |   |-- translated/
+|   |   |   `-- kamihime_*_en.jsonl  # Translated data rendered by the web
+|   |   `-- .translation_cache.json # Shared translation-memory cache
 |   |-- crawler.py              # Crawls character lists and detail pages
 |   |-- pipeline.py             # Runs latest/full updates in the background
 |   |-- data_store.py           # Loads, normalizes, filters, and finds characters
 |   |-- data_loader.py          # Generic JSONL record iterator
+|   |-- paths.py                # Shared data directory and element file paths
 |   |-- translator.py           # Qwen AWQ translation and translation memory
 |   |-- translation_glossary.json # Canonical English game terminology
 |   |-- build_index.py          # Optional FAISS/RAG index builder
@@ -215,8 +243,3 @@ KamiWiki/
 |-- uv.lock                     # Reproducible dependency lockfile
 `-- README.md                   # Project documentation
 ```
-
-The application normally reads the six translated element files under
-`kami/data/`, falling back to the corresponding Japanese raw file when needed.
-The combined files directly under `kami/` are retained as backward-compatible
-fallbacks and are not the primary crawl output.

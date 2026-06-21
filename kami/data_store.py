@@ -7,12 +7,22 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from .paths import BASE_DIR, DATA_DIR, RAW_DATA_DIR, element_translation_path
 
-BASE_DIR = Path(__file__).resolve().parents[1]
-DATA_DIR = BASE_DIR / "kami" / "data"
 RAW_DATA_PATH = BASE_DIR / "kami" / "kamihime_raw.jsonl"
 ENGLISH_DATA_PATH = BASE_DIR / "kami" / "kamihime_en.jsonl"
 LEGACY_DATA_PATH = BASE_DIR / "kami" / "all_kami_data.jsonl"
+INTERNAL_INFO_KEYS = {
+    "name",
+    "Name",
+    "img",
+    "image",
+    "list_image",
+    "source_url",
+    "release_date",
+    "acquisition_method",
+    "element",
+}
 
 
 def _configured_data_path() -> Path | None:
@@ -28,13 +38,14 @@ def _data_paths() -> list[Path]:
     if configured:
         return [configured]
 
-    raw_element_paths = sorted(DATA_DIR.glob("kamihime_*_raw.jsonl"))
+    raw_element_paths = sorted(RAW_DATA_DIR.glob("kamihime_*_raw.jsonl"))
     if raw_element_paths:
         paths: list[Path] = []
         for raw_path in raw_element_paths:
-            english_path = raw_path.with_name(
-                raw_path.name.replace("_raw.jsonl", "_en.jsonl")
+            element = raw_path.name.removeprefix("kamihime_").removesuffix(
+                "_raw.jsonl"
             )
+            english_path = element_translation_path(DATA_DIR, element)
             paths.append(
                 english_path if english_path.exists() else raw_path
             )
@@ -95,6 +106,14 @@ def _info_value(info: dict[str, Any], *keys: str) -> str:
         if value not in (None, ""):
             return str(value)
     return "-"
+
+
+def _display_info(info: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in info.items()
+        if key not in INTERNAL_INFO_KEYS
+    }
 
 
 def _skill_value(skill: dict[str, Any], *patterns: str) -> str:
@@ -227,6 +246,7 @@ def _load_cached(
                     "How to Obtain",
                 ),
                 "info": info,
+                "display_info": _display_info(info),
                 "skills": skills,
                 "skill_sections": _prepare_skill_sections(skills),
                 "flavor": record.get("flavor") or "",

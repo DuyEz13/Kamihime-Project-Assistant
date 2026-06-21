@@ -7,12 +7,18 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from kami.data_store import get_character, load_characters
-from kami.pipeline import get_refresh_status, start_update
+from kami.pipeline import get_refresh_status, start_translation, start_update
 
 
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent
+ASSET_VERSION = str(
+    max(
+        (BASE_DIR / "static" / "wiki.css").stat().st_mtime_ns,
+        (BASE_DIR / "static" / "wiki.js").stat().st_mtime_ns,
+    )
+)
 ELEMENTS = (
     {"key": "fire", "label": "Fire", "image": "火.jpg"},
     {"key": "water", "label": "Water", "image": "水.jpg"},
@@ -30,6 +36,7 @@ app.mount(
     name="element_images",
 )
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
+templates.env.globals["asset_version"] = ASSET_VERSION
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -110,6 +117,16 @@ def update_data(mode: str):
 
 @app.get("/api/update/status")
 def update_status():
+    return get_refresh_status()
+
+
+@app.post("/api/translate/{provider}", status_code=202)
+def translate_database(provider: str):
+    if provider not in {"qwen", "deepl"}:
+        raise HTTPException(status_code=404, detail="Translation provider not found")
+    started = start_translation(provider)
+    if not started:
+        raise HTTPException(status_code=409, detail="An update is already running")
     return get_refresh_status()
 
 

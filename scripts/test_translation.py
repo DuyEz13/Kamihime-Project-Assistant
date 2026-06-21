@@ -14,10 +14,10 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+from kami.paths import DATA_DIR, element_raw_path  # noqa: E402
 from kami.translator import create_translator  # noqa: E402
 
 
-DATA_DIR = ROOT_DIR / "kami" / "data"
 ELEMENTS = ("fire", "water", "wind", "thunder", "light", "dark")
 
 
@@ -52,7 +52,7 @@ def _sample_texts(
     count: int,
     seed: int,
 ) -> list[str]:
-    source = DATA_DIR / f"kamihime_{element}_raw.jsonl"
+    source = element_raw_path(DATA_DIR, element)
     if not source.exists():
         raise FileNotFoundError(f"Raw element data not found: {source}")
 

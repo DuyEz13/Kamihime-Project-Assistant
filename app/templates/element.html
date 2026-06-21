@@ -26,8 +26,64 @@
     </div>
   </div>
 
+  <div class="database-tools">
+    <div class="tool-copy">
+      <p class="tool-kicker">Translation</p>
+      <h2>Translate existing database</h2>
+      <p>Use the current Japanese raw JSONL files and rebuild English data without crawling the wiki again.</p>
+    </div>
+    <form id="translate-form" class="translate-form">
+      <label class="provider-field">
+        <span>Provider</span>
+        <select id="translation-provider" class="provider-select" aria-label="Translation provider">
+          <option value="deepl">DeepL</option>
+          <option value="qwen">Qwen</option>
+        </select>
+      </label>
+      <button
+        id="translate-database"
+        class="refresh-button translate-button"
+        type="submit"
+      >Translate Database</button>
+    </form>
+  </div>
+
   <div id="refresh-status" class="status" data-state="{{ refresh.state }}">
     <div id="refresh-message">{{ refresh.message }}</div>
+    <div
+      id="crawl-progress"
+      class="crawl-progress"
+      data-elements="{% for item in elements %}{{ item.key }}{% if not loop.last %},{% endif %}{% endfor %}"
+      {% if refresh.state not in ["starting", "updating"] %}hidden{% endif %}
+    >
+      <div class="progress-section-title">Crawl progress</div>
+      <div id="crawl-progress-list" class="crawl-progress-list">
+        {% for element_item in elements %}
+        {% set item = (refresh.crawl_progress or {}).get(element_item.key, {}) %}
+        <div class="crawl-progress-item" data-element="{{ element_item.key }}">
+          <div class="progress-meta">
+            <span class="crawl-element-label">{{ element_item.label }}</span>
+            <span class="crawl-count">{{ item.processed or 0 }}/{{ item.total or 0 }}</span>
+          </div>
+          <div
+            class="progress-track"
+            role="progressbar"
+            aria-label="{{ element_item.label }} crawl progress"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow="{{ item.progress or 0 }}"
+          >
+            <div
+              data-progress-fill
+              class="progress-fill"
+              style="width: {{ item.progress or 0 }}%"
+            ></div>
+          </div>
+          <div class="progress-model crawl-current">{{ item.character or "" }}</div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
     <div
       id="translation-progress"
       class="translation-progress"

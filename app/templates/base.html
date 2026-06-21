@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}KamiWiki{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='/wiki.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', path='/wiki.css') }}?v={{ asset_version }}">
 </head>
 <body>
   <div class="app-layout">
@@ -64,7 +64,7 @@
       </div>
     </main>
   </div>
-  <script src="{{ url_for('static', path='/wiki.js') }}"></script>
+  <script src="{{ url_for('static', path='/wiki.js') }}?v={{ asset_version }}"></script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

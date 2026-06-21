@@ -6,6 +6,8 @@ import re
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from .paths import element_raw_path, element_translation_path
+
 
 DEFAULT_MODEL = "Qwen/Qwen2.5-14B-Instruct-AWQ"
 DEFAULT_PROVIDER = "qwen"
@@ -62,10 +64,6 @@ Consistency is more important than stylistic variety:
 - Return only a valid JSON array. Each item must contain the original integer "id"
   and one string field named "translation".
 """
-
-
-def element_translation_path(data_dir: Path, element: str) -> Path:
-    return data_dir / f"kamihime_{element}_en.jsonl"
 
 
 def _atomic_write_json(path: Path, value: Any) -> None:
@@ -790,13 +788,14 @@ def translate_elements(
     data_dir: Path,
     elements: Iterable[str],
     progress_callback: ProgressCallback | None = None,
+    provider: str | None = None,
 ) -> dict[str, int]:
-    translator = create_translator(data_dir)
+    translator = create_translator(data_dir, provider=provider)
     element_records: dict[str, list[dict]] = {}
     all_texts: list[str] = []
     normalized_elements = [element.strip().lower() for element in elements]
     for normalized in normalized_elements:
-        source = data_dir / f"kamihime_{normalized}_raw.jsonl"
+        source = element_raw_path(data_dir, normalized)
         if not source.exists():
             raise FileNotFoundError(f"Raw data file not found: {source}")
         records = _read_jsonl(source)

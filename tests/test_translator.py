@@ -8,7 +8,10 @@ from kami.translator import (
     SUPPORTED_TRANSFORMERS_VERSION,
     _extract_json_array,
     create_translator,
+    translate_elements,
 )
+from kami.paths import element_raw_path, element_translation_path
+from kami.data_store import _display_info
 
 
 def test_translator_preserves_structural_values_and_translates_schema(tmp_path):
@@ -67,6 +70,39 @@ def test_translate_file_writes_valid_jsonl_atomically(tmp_path):
 
     assert translator.translate_file(source, destination) == 1
     assert json.loads(destination.read_text(encoding="utf-8"))["info"]["name"] == "Test"
+
+
+def test_translate_elements_uses_raw_and_translated_subdirectories(tmp_path):
+    source = element_raw_path(tmp_path, "fire")
+    destination = element_translation_path(tmp_path, "fire")
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        json.dumps(
+            {"info": {"name": "Test", "element": "fire"}},
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert translate_elements(tmp_path, ["fire"], provider="qwen") == {"fire": 1}
+    assert destination.exists()
+    assert json.loads(destination.read_text(encoding="utf-8"))["info"]["name"] == "Test"
+
+
+def test_display_info_hides_internal_element_metadata():
+    info = {
+        "Element": "Water",
+        "element": "water",
+        "release_date": "25/05/15",
+        "acquisition_method": "Internal source list value",
+        "Rarity": "SSR",
+    }
+
+    assert _display_info(info) == {
+        "Element": "Water",
+        "Rarity": "SSR",
+    }
 
 
 def test_cached_translation_reports_progress_and_device(tmp_path):
