@@ -1,4 +1,5 @@
 import difflib
+import html
 import hashlib
 import json
 import os
@@ -6,7 +7,14 @@ import re
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from .paths import element_raw_path, element_translation_path
+import httpx
+
+from .paths import (
+    TRANSLATION_PROVIDERS,
+    element_raw_path,
+    element_translation_path,
+    normalize_translation_provider,
+)
 
 
 DEFAULT_MODEL = "Qwen/Qwen2.5-14B-Instruct-AWQ"
@@ -45,6 +53,7 @@ PRESERVED_VALUE_KEYS = {
     "source_url",
     "img",
     "image",
+    "icon",
     "list_image",
     "element",
     "release_date",
@@ -760,16 +769,120 @@ class DeepLJapaneseEnglishTranslator(LocalJapaneseEnglishTranslator):
         }
 
 
+class GoogleJapaneseEnglishTranslator(LocalJapaneseEnglishTranslator):
+    def __init__(
+        self,
+        data_dir: Path,
+        glossary_path: Path | None = None,
+    ) -> None:
+        super().__init__(
+            data_dir,
+            model_name="google-translate-api:v2",
+            glossary_path=glossary_path,
+        )
+        self.batch_size = max(
+            1, int(os.getenv("GOOGLE_TRANSLATE_BATCH_SIZE", "50"))
+        )
+        self.device_label = "Google Translate API"
+        self._client = httpx.Client(timeout=60)
+
+    def _resolve_device(self) -> None:
+        self._device = "api"
+        self.device_label = "Google Translate API"
+
+    def _api_key(self) -> str:
+        api_key = os.getenv("GOOGLE_TRANSLATE_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "Set GOOGLE_TRANSLATE_API_KEY before using the Google provider"
+            )
+        return api_key
+
+    def _translate_batch_google(self, texts: list[str]) -> list[str]:
+        response = self._client.post(
+            "https://translation.googleapis.com/language/translate/v2",
+            params={"key": self._api_key()},
+            json={
+                "q": texts,
+                "source": "ja",
+                "target": "en",
+                "format": "text",
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        translations = (
+            payload.get("data", {})
+            .get("translations", [])
+        )
+        if len(translations) != len(texts):
+            raise RuntimeError(
+                f"Google returned {len(translations)} of {len(texts)} translations"
+            )
+        return [
+            html.unescape(str(item.get("translatedText", "")).strip())
+            for item in translations
+        ]
+
+    def _translate_missing(
+        self,
+        texts: list[str],
+        progress_callback: ProgressCallback | None = None,
+    ) -> None:
+        unique_texts = list(dict.fromkeys(texts))
+        missing = [
+            text for text in unique_texts if not self._cached_translation(text)
+        ]
+        total = len(unique_texts)
+        processed = total - len(missing)
+        self._resolve_device()
+        if progress_callback:
+            progress_callback(
+                {
+                    "phase": "preparing",
+                    "progress": round(processed * 100 / total) if total else 100,
+                    "processed": processed,
+                    "total": total,
+                    "device": self.device_label,
+                    "model": self.model_name,
+                }
+            )
+        if not missing:
+            return
+
+        for offset in range(0, len(missing), self.batch_size):
+            batch = missing[offset : offset + self.batch_size]
+            translations = self._translate_batch_google(batch)
+            for source, translation in zip(batch, translations):
+                self.cache[self.translation_cache_key(source)] = {
+                    "source": source,
+                    "translation": translation,
+                    "model": self.model_name,
+                    "provider": "google",
+                }
+            _atomic_write_json(self.cache_path, self.cache)
+            processed += len(batch)
+            if progress_callback:
+                progress_callback(
+                    {
+                        "phase": "translating",
+                        "progress": round(processed * 100 / total),
+                        "processed": processed,
+                        "total": total,
+                        "device": self.device_label,
+                        "model": self.model_name,
+                    }
+                )
+
+
 def create_translator(
     data_dir: Path,
     provider: str | None = None,
     model_name: str | None = None,
 ) -> LocalJapaneseEnglishTranslator:
-    selected = (
-        provider
-        or os.getenv("KAMI_TRANSLATION_PROVIDER")
-        or DEFAULT_PROVIDER
-    ).strip().lower()
+    selected = normalize_translation_provider(
+        provider or os.getenv("KAMI_TRANSLATION_PROVIDER") or DEFAULT_PROVIDER
+    )
     if selected == "qwen":
         return LocalJapaneseEnglishTranslator(
             data_dir,
@@ -779,8 +892,13 @@ def create_translator(
         if model_name:
             raise ValueError("--model is only supported by the qwen provider")
         return DeepLJapaneseEnglishTranslator(data_dir)
+    if selected == "google":
+        if model_name:
+            raise ValueError("--model is only supported by the qwen provider")
+        return GoogleJapaneseEnglishTranslator(data_dir)
     raise ValueError(
-        "KAMI_TRANSLATION_PROVIDER must be 'qwen' or 'deepl'"
+        "KAMI_TRANSLATION_PROVIDER must be one of: "
+        + ", ".join(TRANSLATION_PROVIDERS)
     )
 
 
@@ -790,7 +908,10 @@ def translate_elements(
     progress_callback: ProgressCallback | None = None,
     provider: str | None = None,
 ) -> dict[str, int]:
-    translator = create_translator(data_dir, provider=provider)
+    selected_provider = normalize_translation_provider(
+        provider or os.getenv("KAMI_TRANSLATION_PROVIDER") or DEFAULT_PROVIDER
+    )
+    translator = create_translator(data_dir, provider=selected_provider)
     element_records: dict[str, list[dict]] = {}
     all_texts: list[str] = []
     normalized_elements = [element.strip().lower() for element in elements]
@@ -812,7 +933,7 @@ def translate_elements(
         ]
         _atomic_write_jsonl(
             translated,
-            element_translation_path(data_dir, normalized),
+            element_translation_path(data_dir, normalized, selected_provider),
         )
         counts[normalized] = len(translated)
     return counts

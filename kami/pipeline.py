@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from .crawler import configured_elements, crawl_all_elements, update_all_elements_latest
 from .data_store import DATA_DIR
+from .paths import TRANSLATION_PROVIDERS
 from .translator import translate_elements
 
 
@@ -273,8 +274,11 @@ def start_update(mode: str) -> bool:
 
 def start_translation(provider: str) -> bool:
     provider = provider.strip().lower()
-    if provider not in {"qwen", "deepl"}:
-        raise ValueError("Translation provider must be 'qwen' or 'deepl'")
+    if provider not in TRANSLATION_PROVIDERS:
+        raise ValueError(
+            "Translation provider must be one of: "
+            + ", ".join(TRANSLATION_PROVIDERS)
+        )
     with _lock:
         if _status["state"] in {"starting", "updating", "translating"}:
             return False

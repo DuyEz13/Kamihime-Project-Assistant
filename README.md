@@ -67,11 +67,29 @@ Test a few values before running a full update:
 uv run python scripts/test_translation.py --provider deepl --element fire --count 5
 ```
 
+### Google Translate API alternative
+
+Google Translate uses the existing `httpx` dependency and writes output to its
+own provider folder. Set an API key in `.env`:
+
+```dotenv
+KAMI_TRANSLATION_PROVIDER=google
+GOOGLE_TRANSLATE_API_KEY=your_google_translate_api_key
+GOOGLE_TRANSLATE_BATCH_SIZE=50
+```
+
+Test a few values before running a full update:
+
+```powershell
+uv run python scripts/test_translation.py --provider google --element fire --count 5
+```
+
 To translate the existing Japanese database without crawling the source wiki
-again, open an element page, choose **DeepL** or **Qwen** from the provider
-dropdown, then click **Translate Database**. This reads the existing
-`kami/data/raw/kamihime_*_raw.jsonl` files and rewrites the corresponding
-`kami/data/translated/kamihime_*_en.jsonl` files only after translation
+again, open an element page, choose **DeepL**, **Google Translate**, or
+**Qwen** from the provider dropdown, then click **Translate Database**. This
+reads the existing `kami/data/raw/kamihime_*_raw.jsonl` files and rewrites the
+corresponding provider output under
+`kami/data/translated/<provider>/kamihime_*_en.jsonl` only after translation
 succeeds.
 
 Add or correct game terminology in `kami/translation_glossary.json`. For
@@ -143,9 +161,10 @@ The element pages provide two update modes:
 Existing element files are replaced atomically only after an update succeeds.
 Raw crawl output is stored under `kami/data/raw/` as
 `kamihime_<element>_raw.jsonl`; translated output is stored under
-`kami/data/translated/` as `kamihime_<element>_en.jsonl`. The web application
-prefers each English file and falls back to its raw file until translation is
-available.
+`kami/data/translated/<provider>/` as `kamihime_<element>_en.jsonl`. The web
+application prefers the provider selected by `KAMI_RENDER_TRANSLATION_PROVIDER`
+or `KAMI_TRANSLATION_PROVIDER`, then falls back to other provider folders and
+finally to raw Japanese data until translation is available.
 
 ## Project Structure
 
@@ -166,14 +185,16 @@ KamiWiki/
 |   |   |-- raw/
 |   |   |   `-- kamihime_*_raw.jsonl # Japanese crawl data, split by element
 |   |   |-- translated/
-|   |   |   `-- kamihime_*_en.jsonl  # Translated data rendered by the web
+|   |   |   |-- deepl/                # DeepL translated element JSONL files
+|   |   |   |-- google/               # Google Translate element JSONL files
+|   |   |   `-- qwen/                 # Qwen translated element JSONL files
 |   |   `-- .translation_cache.json # Shared translation-memory cache
 |   |-- crawler.py              # Crawls character lists and detail pages
 |   |-- pipeline.py             # Runs latest/full updates in the background
 |   |-- data_store.py           # Loads, normalizes, filters, and finds characters
 |   |-- data_loader.py          # Generic JSONL record iterator
 |   |-- paths.py                # Shared data directory and element file paths
-|   |-- translator.py           # Qwen AWQ translation and translation memory
+|   |-- translator.py           # Qwen, DeepL, Google translation pipelines
 |   |-- translation_glossary.json # Canonical English game terminology
 |   |-- build_index.py          # Optional FAISS/RAG index builder
 |   |-- kamihime_raw.jsonl      # Legacy combined raw-data fallback

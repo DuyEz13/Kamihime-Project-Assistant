@@ -227,14 +227,22 @@ class KamihimeCrawler:
             "flavor": "",
         }
         current_skill_type = None
+        current_skill_icon = ""
 
         def parse_skill_row(skill_type: str, cells) -> dict | None:
+            nonlocal current_skill_icon
             expected_columns = 5 if skill_type == "アビリティ" else 3
             values = [cell.get_text(" ", strip=True) for cell in cells]
 
             # The first row in an icon group has an extra icon cell. Upgrade
             # rows share that icon via rowspan and therefore omit the cell.
             if len(values) == expected_columns + 1:
+                image = cells[0].find("img")
+                current_skill_icon = (
+                    urljoin(page_url, image.get("src"))
+                    if image and image.get("src")
+                    else ""
+                )
                 values = values[1:]
             if len(values) != expected_columns:
                 return None
@@ -242,6 +250,7 @@ class KamihimeCrawler:
             if skill_type == "アビリティ":
                 name, requirement, interval, duration, effect = values
                 return {
+                    "icon": current_skill_icon,
                     skill_type: name,
                     "習得条件": requirement or "-",
                     "使用間隔": interval,
@@ -251,6 +260,7 @@ class KamihimeCrawler:
 
             name, requirement, effect = values
             return {
+                "icon": current_skill_icon,
                 skill_type: name,
                 "習得条件": requirement or "-",
                 "効果": effect,
@@ -284,6 +294,7 @@ class KamihimeCrawler:
                 )
                 if skill_type:
                     current_skill_type = skill_type
+                    current_skill_icon = ""
                     continue
 
                 if len(ths) == 1 and len(tds) == 1:

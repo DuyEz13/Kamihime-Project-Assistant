@@ -2,6 +2,7 @@ import json
 
 from kami.translator import (
     DeepLJapaneseEnglishTranslator,
+    GoogleJapaneseEnglishTranslator,
     KEY_TRANSLATIONS,
     LocalJapaneseEnglishTranslator,
     SUPPORTED_TORCH_VERSION,
@@ -74,7 +75,7 @@ def test_translate_file_writes_valid_jsonl_atomically(tmp_path):
 
 def test_translate_elements_uses_raw_and_translated_subdirectories(tmp_path):
     source = element_raw_path(tmp_path, "fire")
-    destination = element_translation_path(tmp_path, "fire")
+    destination = element_translation_path(tmp_path, "fire", "qwen")
     source.parent.mkdir(parents=True)
     source.write_text(
         json.dumps(
@@ -88,6 +89,19 @@ def test_translate_elements_uses_raw_and_translated_subdirectories(tmp_path):
     assert translate_elements(tmp_path, ["fire"], provider="qwen") == {"fire": 1}
     assert destination.exists()
     assert json.loads(destination.read_text(encoding="utf-8"))["info"]["name"] == "Test"
+
+
+def test_translation_paths_are_split_by_provider(tmp_path):
+    assert element_translation_path(
+        tmp_path,
+        "fire",
+        "deepl",
+    ) == tmp_path / "translated" / "deepl" / "kamihime_fire_en.jsonl"
+    assert element_translation_path(
+        tmp_path,
+        "fire",
+        "google",
+    ) == tmp_path / "translated" / "google" / "kamihime_fire_en.jsonl"
 
 
 def test_display_info_hides_internal_element_metadata():
@@ -205,12 +219,24 @@ def test_create_translator_selects_deepl_provider(tmp_path):
     assert translator.model_name.startswith("deepl-api:")
 
 
+def test_create_translator_selects_google_provider(tmp_path):
+    translator = create_translator(tmp_path, provider="google")
+
+    assert isinstance(translator, GoogleJapaneseEnglishTranslator)
+    assert translator.device_label == "Google Translate API"
+    assert translator.model_name == "google-translate-api:v2"
+
+
 def test_deepl_and_qwen_use_separate_cache_namespaces(tmp_path):
     qwen = create_translator(tmp_path, provider="qwen", model_name="test-model")
     deepl = create_translator(tmp_path, provider="deepl")
+    google = create_translator(tmp_path, provider="google")
 
     assert qwen.translation_cache_key("ニケ") != deepl.translation_cache_key(
         "ニケ"
+    )
+    assert google.translation_cache_key("sample") != deepl.translation_cache_key(
+        "sample"
     )
 
 
@@ -243,6 +269,89 @@ def test_deepl_translates_batch_and_caches_results(tmp_path):
     translator._deepl_glossary = "glossary-id"
 
     translated = translator.translate_texts(["ニケ", "レイジング状態"])
+
+    assert translated == ["Nike", "Raging state"]
+
+
+def test_google_requires_api_key(tmp_path, monkeypatch):
+    monkeypatch.delenv("GOOGLE_TRANSLATE_API_KEY", raising=False)
+    translator = GoogleJapaneseEnglishTranslator(tmp_path)
+
+    try:
+        translator._api_key()
+    except RuntimeError as exc:
+        assert "GOOGLE_TRANSLATE_API_KEY" in str(exc)
+    else:
+        raise AssertionError("Google translator should require an API key")
+
+
+def test_google_translates_batch_and_caches_results(tmp_path, monkeypatch):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "data": {
+                    "translations": [
+                        {"translatedText": "Nike"},
+                        {"translatedText": "Raging state"},
+                    ]
+                }
+            }
+
+    class Client:
+        def post(self, url, *, params, json):
+            assert params["key"] == "google-key"
+            assert json["source"] == "ja"
+            assert json["target"] == "en"
+            assert json["q"] == [
+                "\u30cb\u30b1",
+                "\u30ec\u30a4\u30b8\u30f3\u30b0\u72b6\u614b",
+            ]
+            return Response()
+
+    monkeypatch.setenv("GOOGLE_TRANSLATE_API_KEY", "google-key")
+    translator = GoogleJapaneseEnglishTranslator(tmp_path)
+    translator._client = Client()
+
+    nike = "\u30cb\u30b1"
+    raging_state = "\u30ec\u30a4\u30b8\u30f3\u30b0\u72b6\u614b"
+    translated = translator.translate_texts([nike, raging_state])
+
+    assert translated == ["Nike", "Raging state"]
+    assert translator._cached_translation(nike) == "Nike"
+    assert translator._cached_translation(raging_state) == "Raging state"
+
+
+def google_translates_batch_and_caches_results_legacy_mojibake(tmp_path, monkeypatch):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "data": {
+                    "translations": [
+                        {"translatedText": "Nike"},
+                        {"translatedText": "Raging state"},
+                    ]
+                }
+            }
+
+    class Client:
+        def post(self, url, *, params, json):
+            assert params["key"] == "google-key"
+            assert json["source"] == "ja"
+            assert json["target"] == "en"
+            assert len(json["q"]) == 2
+            return Response()
+
+    monkeypatch.setenv("GOOGLE_TRANSLATE_API_KEY", "google-key")
+    translator = GoogleJapaneseEnglishTranslator(tmp_path)
+    translator._client = Client()
+
+    translated = translator.translate_texts(["ãƒ‹ã‚±", "ãƒ¬ã‚¤ã‚¸ãƒ³ã‚°çŠ¶æ…‹"])
 
     assert translated == ["Nike", "Raging state"]
     assert translator._cached_translation("ニケ") == "Nike"

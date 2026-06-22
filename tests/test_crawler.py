@@ -57,3 +57,31 @@ def test_crawl_reports_detail_progress(monkeypatch):
     assert [event["processed"] for event in events] == [0, 1, 2]
     assert all(event["total"] == 2 for event in events)
     assert [record["info"]["name"] for record in records] == ["A", "B"]
+
+
+def test_parse_character_preserves_skill_icons():
+    html = """
+    <table>
+      <tr><th>バースト</th></tr>
+      <tr>
+        <td rowspan="2"><img src="/icons/burst.png"></td>
+        <td>Queen Fire</td>
+        <td>-</td>
+        <td>Fire damage</td>
+      </tr>
+      <tr>
+        <td>Queen Fire+</td>
+        <td>Limit break</td>
+        <td>Fire damage up</td>
+      </tr>
+    </table>
+    """
+
+    record = KamihimeCrawler.parse_character(
+        html,
+        "Test",
+        "https://example.test/characters/test",
+    )
+
+    assert record["skill"][0]["icon"] == "https://example.test/icons/burst.png"
+    assert record["skill"][1]["icon"] == "https://example.test/icons/burst.png"

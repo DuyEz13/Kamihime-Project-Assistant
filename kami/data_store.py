@@ -7,7 +7,13 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from .paths import BASE_DIR, DATA_DIR, RAW_DATA_DIR, element_translation_path
+from .paths import (
+    BASE_DIR,
+    DATA_DIR,
+    RAW_DATA_DIR,
+    element_translation_path,
+    translation_provider_order,
+)
 
 RAW_DATA_PATH = BASE_DIR / "kami" / "kamihime_raw.jsonl"
 ENGLISH_DATA_PATH = BASE_DIR / "kami" / "kamihime_en.jsonl"
@@ -45,10 +51,15 @@ def _data_paths() -> list[Path]:
             element = raw_path.name.removeprefix("kamihime_").removesuffix(
                 "_raw.jsonl"
             )
-            english_path = element_translation_path(DATA_DIR, element)
-            paths.append(
-                english_path if english_path.exists() else raw_path
+            translated_paths = [
+                element_translation_path(DATA_DIR, element, provider)
+                for provider in translation_provider_order()
+            ]
+            translated_path = next(
+                (path for path in translated_paths if path.exists()),
+                None,
             )
+            paths.append(translated_path or raw_path)
         return paths
     if RAW_DATA_PATH.exists():
         return [RAW_DATA_PATH]
@@ -158,6 +169,7 @@ def _prepare_skill_sections(skills: list[Any]) -> list[dict[str, Any]]:
         skill_type, skill_name = _skill_type_and_name(skill)
         sections[skill_type].append(
             {
+                "icon": str(skill.get("icon") or skill.get("Icon") or ""),
                 "name": skill_name,
                 "requirements": _skill_value(
                     skill,
@@ -249,6 +261,11 @@ def _load_cached(
                 "display_info": _display_info(info),
                 "skills": skills,
                 "skill_sections": _prepare_skill_sections(skills),
+                "has_skill_icons": any(
+                    isinstance(skill, dict)
+                    and bool(skill.get("icon") or skill.get("Icon"))
+                    for skill in skills
+                ),
                 "flavor": record.get("flavor") or "",
             }
         )

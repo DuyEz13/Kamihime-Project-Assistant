@@ -98,7 +98,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--provider",
-        choices=("qwen", "deepl"),
+        choices=("qwen", "deepl", "google"),
         help="Translation provider. Defaults to KAMI_TRANSLATION_PROVIDER.",
     )
     parser.add_argument(

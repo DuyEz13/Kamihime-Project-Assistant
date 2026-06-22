@@ -8,6 +8,7 @@ from fastapi.templating import Jinja2Templates
 
 from kami.data_store import get_character, load_characters
 from kami.pipeline import get_refresh_status, start_translation, start_update
+from kami.paths import TRANSLATION_PROVIDERS
 
 
 load_dotenv()
@@ -122,7 +123,7 @@ def update_status():
 
 @app.post("/api/translate/{provider}", status_code=202)
 def translate_database(provider: str):
-    if provider not in {"qwen", "deepl"}:
+    if provider not in TRANSLATION_PROVIDERS:
         raise HTTPException(status_code=404, detail="Translation provider not found")
     started = start_translation(provider)
     if not started:

@@ -59,6 +59,9 @@
       <div class="table-scroll">
         <table class="data-table skill-table">
           <colgroup>
+            {% if character.has_skill_icons %}
+            <col class="skill-col-icon">
+            {% endif %}
             <col class="skill-col-name">
             <col class="skill-col-acquisition">
             <col class="skill-col-interval">
@@ -69,7 +72,7 @@
             {% for section in character.skill_sections %}
               {% if section.type == "Ability" %}
               <tr class="skill-section-heading">
-                <th>Ability</th>
+                <th {% if character.has_skill_icons %}colspan="2"{% endif %}>Ability</th>
                 <th>Acquisition</th>
                 <th>Interval</th>
                 <th>Duration</th>
@@ -77,6 +80,11 @@
               </tr>
               {% for skill in section.rows %}
               <tr>
+                {% if character.has_skill_icons %}
+                <td class="skill-icon-cell">
+                  {% if skill.icon %}<img src="{{ skill.icon }}" alt="" loading="lazy">{% endif %}
+                </td>
+                {% endif %}
                 <td class="skill-name">{{ skill.name }}</td>
                 <td class="skill-meta">{{ skill.requirements }}</td>
                 <td class="skill-meta">{{ skill.interval }}</td>
@@ -86,12 +94,17 @@
               {% endfor %}
               {% else %}
               <tr class="skill-section-heading">
-                <th>{{ section.type }}</th>
+                <th {% if character.has_skill_icons %}colspan="2"{% endif %}>{{ section.type }}</th>
                 <th colspan="3">Acquisition</th>
                 <th>Effect</th>
               </tr>
               {% for skill in section.rows %}
               <tr>
+                {% if character.has_skill_icons %}
+                <td class="skill-icon-cell">
+                  {% if skill.icon %}<img src="{{ skill.icon }}" alt="" loading="lazy">{% endif %}
+                </td>
+                {% endif %}
                 <td class="skill-name">{{ skill.name }}</td>
                 <td class="skill-meta" colspan="3">{{ skill.requirements }}</td>
                 <td class="skill-effect">{{ skill.effect }}</td>
