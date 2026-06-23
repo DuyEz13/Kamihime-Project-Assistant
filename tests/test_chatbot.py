@@ -36,6 +36,31 @@ def _characters():
     ]
 
 
+def _characters_with_gacha_noise():
+    return [
+        {
+            "slug": "phoenix-cry",
+            "name": "Phoenix Cry",
+            "element": "Fire",
+            "release_date": "2024/05/01",
+            "acquisition_method": "Limited-Time Gacha (Collaboration)",
+            "display_info": {"Rarity": "SSR"},
+            "skill_sections": [],
+            "flavor": "",
+        },
+        {
+            "slug": "ra",
+            "name": "Ra",
+            "element": "Light",
+            "release_date": "2020/01/01",
+            "acquisition_method": "Premium Gacha",
+            "display_info": {"Rarity": "SSR"},
+            "skill_sections": [],
+            "flavor": "A gacha character with gacha-related text.",
+        },
+    ]
+
+
 def test_retrieve_characters_scores_name_and_skill(monkeypatch):
     monkeypatch.setattr(chatbot, "load_characters", _characters)
 
@@ -121,6 +146,29 @@ def test_followup_question_uses_session_memory_for_rag(tmp_path, monkeypatch):
 
     assert second["session_id"] == first["session_id"]
     assert "Healing Stream" in contexts[-1]
+
+
+def test_followup_prioritizes_previous_answer_sources_over_generic_terms(tmp_path, monkeypatch):
+    monkeypatch.setattr(chatbot, "CHAT_MEMORY_PATH", tmp_path / "chat_sessions.json")
+    monkeypatch.setattr(chatbot, "load_characters", _characters_with_gacha_noise)
+
+    contexts = []
+
+    def fake_model(_provider, _model, _session_id, _message, context):
+        contexts.append(context)
+        return "Answer from retrieved context."
+
+    monkeypatch.setattr(chatbot, "_call_model", fake_model)
+
+    first = chatbot.answer_chat("How do I get Phoenix Cry?", provider="gpt")
+    second = chatbot.answer_chat(
+        "When does that gacha happen?",
+        session_id=first["session_id"],
+        provider="gpt",
+    )
+
+    assert second["sources"][0]["name"] == "Phoenix Cry"
+    assert contexts[-1].find("Name: Phoenix Cry") < contexts[-1].find("Name: Ra")
 
 
 def test_chat_provider_retries_transient_http_status(monkeypatch):

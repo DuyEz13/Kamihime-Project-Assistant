@@ -260,6 +260,71 @@ function restoreChatWelcome() {
   bindPromptButtons();
 }
 
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function renderInlineMarkdown(value) {
+  return escapeHtml(value)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
+}
+
+function renderMarkdown(text) {
+  const lines = String(text || "").split(/\r?\n/);
+  const blocks = [];
+  let paragraph = [];
+  let list = null;
+
+  function flushParagraph() {
+    if (!paragraph.length) return;
+    blocks.push(`<p>${paragraph.map(renderInlineMarkdown).join("<br>")}</p>`);
+    paragraph = [];
+  }
+
+  function flushList() {
+    if (!list) return;
+    const tag = list.type === "ol" ? "ol" : "ul";
+    blocks.push(`<${tag}>${list.items.map((item) => `<li>${renderInlineMarkdown(item)}</li>`).join("")}</${tag}>`);
+    list = null;
+  }
+
+  lines.forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      flushParagraph();
+      flushList();
+      return;
+    }
+
+    const ordered = trimmed.match(/^\d+[.)]\s+(.+)$/);
+    const unordered = trimmed.match(/^[-*]\s+(.+)$/);
+    if (ordered || unordered) {
+      flushParagraph();
+      const type = ordered ? "ol" : "ul";
+      if (!list || list.type !== type) {
+        flushList();
+        list = { type, items: [] };
+      }
+      list.items.push((ordered || unordered)[1]);
+      return;
+    }
+
+    flushList();
+    paragraph.push(trimmed);
+  });
+
+  flushParagraph();
+  flushList();
+  return blocks.join("");
+}
+
 function appendChatMessage(role, text, options = {}) {
   if (!chatThread) return;
   removeChatWelcome();
@@ -269,7 +334,11 @@ function appendChatMessage(role, text, options = {}) {
   if (options.error) row.classList.add("error");
   const bubble = document.createElement("div");
   bubble.className = "message-bubble";
-  bubble.textContent = text;
+  if (role === "assistant" && !options.pending && !options.error) {
+    bubble.innerHTML = renderMarkdown(text);
+  } else {
+    bubble.textContent = text;
+  }
   if (options.sources?.length) {
     const sources = document.createElement("div");
     sources.className = "chat-sources";

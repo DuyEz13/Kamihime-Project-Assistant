@@ -318,6 +318,53 @@ def retrieve_characters(query: str, limit: int | None = None) -> list[tuple[dict
     return scored[: limit or _rag_top_k()]
 
 
+def _character_by_slug() -> dict[str, dict[str, Any]]:
+    return {
+        str(character.get("slug") or ""): character
+        for character in load_characters()
+        if character.get("slug")
+    }
+
+
+def _previous_source_characters(session_id: str) -> list[tuple[dict[str, Any], float]]:
+    slug_map = _character_by_slug()
+    previous: list[tuple[dict[str, Any], float]] = []
+    seen: set[str] = set()
+    for message in reversed(_session_messages(session_id)):
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        for source in message.get("sources") or []:
+            if not isinstance(source, dict):
+                continue
+            slug = str(source.get("slug") or "")
+            if not slug or slug in seen or slug not in slug_map:
+                continue
+            previous.append((slug_map[slug], 100.0 - len(previous)))
+            seen.add(slug)
+        if previous:
+            break
+    return previous
+
+
+def _merge_ranked_sources(
+    primary: list[tuple[dict[str, Any], float]],
+    secondary: list[tuple[dict[str, Any], float]],
+    limit: int,
+) -> list[tuple[dict[str, Any], float]]:
+    merged: list[tuple[dict[str, Any], float]] = []
+    seen: set[str] = set()
+    for character, score in [*primary, *secondary]:
+        slug = str(character.get("slug") or "")
+        key = slug or str(character.get("name") or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append((character, score))
+        if len(merged) >= limit:
+            break
+    return merged
+
+
 def is_domain_question(message: str, sources: list[tuple[dict[str, Any], float]]) -> bool:
     tokens = _tokenize(message)
     if tokens & DOMAIN_KEYWORDS:
@@ -626,17 +673,16 @@ def answer_chat(
     sources = retrieve_characters(clean_message)
     message_tokens = _tokenize(clean_message)
     if (message_tokens & FOLLOWUP_KEYWORDS) and _session_messages(current_session_id):
+        previous_sources = _previous_source_characters(current_session_id)
         memory_text = "\n".join(
             item["content"] for item in _memory_for_prompt(current_session_id)
         )
         memory_sources = retrieve_characters(f"{clean_message}\n{memory_text}")
-        known_slugs = {character.get("slug") for character, _score in sources}
-        for character, score in memory_sources:
-            if character.get("slug") not in known_slugs:
-                sources.append((character, score))
-                known_slugs.add(character.get("slug"))
-        sources.sort(key=lambda item: item[1], reverse=True)
-        sources = sources[:_rag_top_k()]
+        sources = _merge_ranked_sources(
+            previous_sources,
+            [*sources, *memory_sources],
+            _rag_top_k(),
+        )
     source_payload = [
         RagSource(
             name=str(character.get("name") or ""),
