@@ -19,13 +19,6 @@ uv sync --extra rag
 
 # Install every optional feature
 uv sync --all-extras
-```
-
-Copy `.env.example` to `.env` and configure values as needed:
-
-```dotenv
-KAMI_ELEMENTS=fire,water,wind,thunder,light,dark
-```
 
 Configure local translation with:
 
@@ -188,7 +181,9 @@ KamiWiki/
 |   |   |   |-- deepl/                # DeepL translated element JSONL files
 |   |   |   |-- google/               # Google Translate element JSONL files
 |   |   |   `-- qwen/                 # Qwen translated element JSONL files
+|   |   |-- chat_sessions.json      # Per-conversation chatbot memory
 |   |   `-- .translation_cache.json # Shared translation-memory cache
+|   |-- chatbot.py              # RAG retrieval, chat memory and calls
 |   |-- crawler.py              # Crawls character lists and detail pages
 |   |-- pipeline.py             # Runs latest/full updates in the background
 |   |-- data_store.py           # Loads, normalizes, filters, and finds characters

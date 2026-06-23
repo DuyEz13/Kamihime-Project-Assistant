@@ -5,7 +5,15 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel, Field
 
+from kami.chatbot import (
+    answer_chat,
+    available_chat_models,
+    delete_session,
+    get_session,
+    list_sessions,
+)
 from kami.data_store import get_character, load_characters
 from kami.pipeline import get_refresh_status, start_translation, start_update
 from kami.paths import TRANSLATION_PROVIDERS
@@ -40,6 +48,12 @@ templates = Jinja2Templates(directory=BASE_DIR / "templates")
 templates.env.globals["asset_version"] = ASSET_VERSION
 
 
+class ChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+    session_id: str | None = None
+    provider: str = "gpt"
+
+
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
     return templates.TemplateResponse(
@@ -51,6 +65,52 @@ def home(request: Request):
             "refresh": get_refresh_status(),
         },
     )
+
+
+@app.get("/api/chat/models")
+def chat_models():
+    return {
+        "models": [
+            {
+                "provider": model.provider,
+                "label": model.label,
+                "model": model.model,
+                "configured": model.configured,
+            }
+            for model in available_chat_models()
+        ]
+    }
+
+
+@app.get("/api/chat/sessions")
+def chat_sessions():
+    return {"sessions": list_sessions()}
+
+
+@app.get("/api/chat/{session_id}")
+def chat_session(session_id: str):
+    return get_session(session_id)
+
+
+@app.delete("/api/chat/{session_id}")
+def remove_chat_session(session_id: str):
+    if not delete_session(session_id):
+        raise HTTPException(status_code=404, detail="Chat session not found")
+    return {"deleted": True, "session_id": session_id}
+
+
+@app.post("/api/chat")
+def chat(request: ChatRequest):
+    try:
+        return answer_chat(
+            message=request.message,
+            session_id=request.session_id,
+            provider=request.provider,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @app.get("/elements/{element}", response_class=HTMLResponse)

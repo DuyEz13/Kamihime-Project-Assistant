@@ -6,21 +6,31 @@
     <div class="chat-welcome">
       <span class="assistant-logo">K</span>
       <h1>How can I help with Kamihime?</h1>
-      <p>Ask about characters, elements, skills, or team ideas.</p>
+      <p>Ask about characters, elements, skills, release data, or acquisition data.</p>
       <div class="prompt-suggestions">
         <button type="button" data-prompt="Show me notable Fire characters">Notable Fire characters</button>
-        <button type="button" data-prompt="Compare Burst and Ability skills">Compare skill types</button>
-        <button type="button" data-prompt="Which element should I browse?">Browse by element</button>
+        <button type="button" data-prompt="Compare Nike and Sol">Compare two characters</button>
+        <button type="button" data-prompt="Which Water characters have healing skills?">Find healing skills</button>
       </div>
     </div>
   </div>
 
   <div class="chat-composer-wrap">
+    <div class="chat-toolbar">
+      <button id="new-chat-session" class="chat-secondary-button" type="button">New conversation</button>
+      <label class="chat-model-picker">
+        <span>Model</span>
+        <select id="chat-model-provider" aria-label="Chat model provider">
+          <option value="gpt">GPT</option>
+          <option value="gemini">Gemini</option>
+        </select>
+      </label>
+    </div>
     <form id="chat-form" class="chat-composer">
       <textarea id="chat-input" rows="1" placeholder="Message KamiWiki..." aria-label="Chat message"></textarea>
       <button class="send-button" type="submit" aria-label="Send message">↑</button>
     </form>
-    <p class="composer-note">The chat model is not connected yet. This interface is a UI preview.</p>
+    <p class="composer-note">KamiWiki only answers questions about Kamihime Project characters from the translated local database.</p>
   </div>
 </section>
 {% endblock %}

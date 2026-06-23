@@ -23,6 +23,7 @@ __pycache__/
 *.tmp
 vectorstore/
 kami/data/.translation_cache.json
+kami/data/chat_sessions.json
 
 # OS files
 .DS_Store

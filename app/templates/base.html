@@ -14,7 +14,7 @@
           <span class="brand-mark">K</span>
           <span>KamiWiki</span>
         </a>
-        <a class="new-chat-button" href="/">
+        <a id="sidebar-new-chat" class="new-chat-button" href="/">
           <span>+</span>
           New chat
         </a>
@@ -35,19 +35,10 @@
 
       <div class="chat-history">
         <p class="sidebar-label">Chat history</p>
-        <a href="/" class="history-link active">
-          <span class="history-icon">◷</span>
-          <span>Explore Kamihime data</span>
-        </a>
-        <a href="/" class="history-link">
-          <span class="history-icon">◷</span>
-          <span>Fire team recommendations</span>
-        </a>
-        <a href="/" class="history-link">
-          <span class="history-icon">◷</span>
-          <span>Compare character skills</span>
-        </a>
-        <p class="history-note">Chat history is UI-only for now.</p>
+        <div id="chat-history-list" class="history-list">
+          <p class="history-note">Loading chat history...</p>
+        </div>
+        <p id="chat-history-empty" class="history-note" hidden>No chat history yet.</p>
       </div>
     </aside>
 

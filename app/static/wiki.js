@@ -25,6 +25,11 @@ const sidebarBackdrop = document.getElementById("sidebar-backdrop");
 const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
 const chatThread = document.getElementById("chat-thread");
+const chatModelProvider = document.getElementById("chat-model-provider");
+const newChatSessionButton = document.getElementById("new-chat-session");
+const sidebarNewChat = document.getElementById("sidebar-new-chat");
+const chatHistoryList = document.getElementById("chat-history-list");
+const chatHistoryEmpty = document.getElementById("chat-history-empty");
 let polling = false;
 
 function titleCase(value) {
@@ -226,16 +231,158 @@ document.querySelectorAll(".element-link").forEach((link) => {
   link.addEventListener("click", closeSidebar);
 });
 
-function appendChatMessage(role, text) {
+const CHAT_SESSION_KEY = "kamiwiki_chat_session_id";
+const CHAT_PROVIDER_KEY = "kamiwiki_chat_provider";
+const urlParams = new URLSearchParams(window.location.search);
+let chatSessionId = urlParams.get("chat") || window.localStorage.getItem(CHAT_SESSION_KEY) || "";
+if (urlParams.get("chat")) {
+  window.localStorage.setItem(CHAT_SESSION_KEY, chatSessionId);
+}
+
+function removeChatWelcome() {
+  chatThread?.querySelector(".chat-welcome")?.remove();
+}
+
+function restoreChatWelcome() {
+  if (!chatThread || chatThread.querySelector(".chat-welcome")) return;
+  chatThread.innerHTML = `
+    <div class="chat-welcome">
+      <span class="assistant-logo">K</span>
+      <h1>How can I help with Kamihime?</h1>
+      <p>Ask about characters, elements, skills, release data, or acquisition data.</p>
+      <div class="prompt-suggestions">
+        <button type="button" data-prompt="Show me notable Fire characters">Notable Fire characters</button>
+        <button type="button" data-prompt="Compare Nike and Sol">Compare two characters</button>
+        <button type="button" data-prompt="Which Water characters have healing skills?">Find healing skills</button>
+      </div>
+    </div>
+  `;
+  bindPromptButtons();
+}
+
+function appendChatMessage(role, text, options = {}) {
   if (!chatThread) return;
+  removeChatWelcome();
   const row = document.createElement("div");
   row.className = `chat-message ${role}`;
+  if (options.pending) row.dataset.pending = "1";
+  if (options.error) row.classList.add("error");
   const bubble = document.createElement("div");
   bubble.className = "message-bubble";
   bubble.textContent = text;
+  if (options.sources?.length) {
+    const sources = document.createElement("div");
+    sources.className = "chat-sources";
+    sources.textContent = `Sources: ${options.sources
+      .slice(0, 5)
+      .map((source) => source.name)
+      .join(", ")}`;
+    bubble.appendChild(sources);
+  }
   row.appendChild(bubble);
   chatThread.appendChild(row);
   chatThread.scrollTop = chatThread.scrollHeight;
+  return row;
+}
+
+function setActiveHistoryItem() {
+  document.querySelectorAll("[data-chat-session]").forEach((row) => {
+    row.classList.toggle("active", row.dataset.chatSession === chatSessionId);
+  });
+}
+
+function clearChatThread() {
+  if (!chatThread) return;
+  chatThread.innerHTML = "";
+  restoreChatWelcome();
+}
+
+function startNewChat(event) {
+  window.localStorage.removeItem(CHAT_SESSION_KEY);
+  chatSessionId = "";
+  if (!chatThread) return;
+  event?.preventDefault();
+  clearChatThread();
+  setActiveHistoryItem();
+  chatInput?.focus();
+  if (window.location.search) {
+    window.history.replaceState({}, "", window.location.pathname);
+  }
+}
+
+function renderChatHistory(sessions) {
+  if (!chatHistoryList) return;
+  chatHistoryList.innerHTML = "";
+  if (chatHistoryEmpty) chatHistoryEmpty.hidden = sessions.length > 0;
+
+  sessions.forEach((session) => {
+    const row = document.createElement("div");
+    row.className = "history-row";
+    row.dataset.chatSession = session.session_id;
+
+    const link = document.createElement("a");
+    link.className = "history-link";
+    link.href = `/?chat=${encodeURIComponent(session.session_id)}`;
+    link.title = session.title;
+    const icon = document.createElement("span");
+    icon.className = "history-icon";
+    icon.textContent = "◷";
+    const title = document.createElement("span");
+    title.textContent = session.title || "New chat";
+    link.append(icon, title);
+
+    link.addEventListener("click", (event) => {
+      window.localStorage.setItem(CHAT_SESSION_KEY, session.session_id);
+      chatSessionId = session.session_id;
+      if (!chatThread) return;
+      event.preventDefault();
+      loadChatSession(session.session_id);
+      setActiveHistoryItem();
+      closeSidebar();
+      window.history.replaceState({}, "", `/?chat=${encodeURIComponent(session.session_id)}`);
+    });
+
+    const deleteButton = document.createElement("button");
+    deleteButton.className = "history-delete";
+    deleteButton.type = "button";
+    deleteButton.title = "Delete chat";
+    deleteButton.setAttribute("aria-label", `Delete ${session.title || "chat"}`);
+    deleteButton.textContent = "×";
+    deleteButton.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const confirmed = window.confirm(`Delete chat "${session.title || "New chat"}"?`);
+      if (!confirmed) return;
+      try {
+        const response = await fetch(`/api/chat/${session.session_id}`, { method: "DELETE" });
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.detail || "Could not delete chat");
+        if (chatSessionId === session.session_id) {
+          startNewChat();
+        }
+        await loadChatHistory();
+      } catch (error) {
+        window.alert(error.message);
+      }
+    });
+
+    row.append(link, deleteButton);
+    chatHistoryList.appendChild(row);
+  });
+  setActiveHistoryItem();
+}
+
+async function loadChatHistory() {
+  if (!chatHistoryList) return;
+  try {
+    const response = await fetch("/api/chat/sessions");
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.detail || "Could not load chat history");
+    renderChatHistory(body.sessions || []);
+  } catch {
+    chatHistoryList.innerHTML = '<p class="history-note">Could not load chat history.</p>';
+    if (chatHistoryEmpty) chatHistoryEmpty.hidden = true;
+  }
 }
 
 chatInput?.addEventListener("input", () => {
@@ -243,25 +390,111 @@ chatInput?.addEventListener("input", () => {
   chatInput.style.height = `${Math.min(chatInput.scrollHeight, 180)}px`;
 });
 
-chatForm?.addEventListener("submit", (event) => {
+function setChatBusy(busy) {
+  if (chatInput) chatInput.disabled = busy;
+  chatForm?.querySelector(".send-button")?.toggleAttribute("disabled", busy);
+  if (chatModelProvider) chatModelProvider.disabled = busy;
+}
+
+async function loadChatModels() {
+  if (!chatModelProvider) return;
+  const preferred = window.localStorage.getItem(CHAT_PROVIDER_KEY) || chatModelProvider.value;
+  try {
+    const response = await fetch("/api/chat/models");
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.detail || "Could not load chat models");
+    chatModelProvider.innerHTML = "";
+    body.models.forEach((model) => {
+      const option = document.createElement("option");
+      option.value = model.provider;
+      option.textContent = `${model.label} (${model.model})${model.configured ? "" : " - missing key"}`;
+      option.disabled = !model.configured;
+      chatModelProvider.appendChild(option);
+    });
+    const preferredOption = Array.from(chatModelProvider.options).find(
+      (option) => option.value === preferred && !option.disabled
+    );
+    const firstEnabled = Array.from(chatModelProvider.options).find((option) => !option.disabled);
+    chatModelProvider.value = preferredOption?.value || firstEnabled?.value || "gpt";
+  } catch {
+    chatModelProvider.value = preferred;
+  }
+}
+
+async function loadChatSession(sessionId = chatSessionId) {
+  if (!chatThread || !sessionId) return;
+  try {
+    const response = await fetch(`/api/chat/${sessionId}`);
+    const body = await response.json();
+    if (!response.ok || !body.messages?.length) return;
+    chatThread.innerHTML = "";
+    chatSessionId = sessionId;
+    window.localStorage.setItem(CHAT_SESSION_KEY, chatSessionId);
+    body.messages.forEach((message) => {
+      appendChatMessage(message.role, message.content, { sources: message.sources });
+    });
+    setActiveHistoryItem();
+  } catch {
+    // Keep the blank welcome screen if stored history cannot be loaded.
+  }
+}
+
+chatModelProvider?.addEventListener("change", () => {
+  window.localStorage.setItem(CHAT_PROVIDER_KEY, chatModelProvider.value);
+});
+
+newChatSessionButton?.addEventListener("click", startNewChat);
+sidebarNewChat?.addEventListener("click", startNewChat);
+
+chatForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const message = chatInput.value.trim();
   if (!message) return;
   appendChatMessage("user", message);
   chatInput.value = "";
   chatInput.style.height = "auto";
-  window.setTimeout(() => {
-    appendChatMessage(
-      "assistant",
-      "The chat model is not connected yet. Use the element list on the left to browse character data."
-    );
-  }, 250);
+  const pending = appendChatMessage("assistant", "Thinking...", { pending: true });
+  setChatBusy(true);
+  try {
+    const response = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        session_id: chatSessionId || null,
+        provider: chatModelProvider?.value || "gpt",
+        message,
+      }),
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.detail || "Chat request failed");
+    chatSessionId = body.session_id;
+    window.localStorage.setItem(CHAT_SESSION_KEY, chatSessionId);
+    pending?.remove();
+    appendChatMessage("assistant", body.answer, { sources: body.sources });
+    await loadChatHistory();
+  } catch (error) {
+    pending?.remove();
+    appendChatMessage("assistant", error.message, { error: true });
+  } finally {
+    setChatBusy(false);
+    chatInput.focus();
+  }
 });
 
-document.querySelectorAll("[data-prompt]").forEach((button) => {
-  button.addEventListener("click", () => {
-    if (!chatInput) return;
-    chatInput.value = button.dataset.prompt || "";
-    chatInput.focus();
+function bindPromptButtons() {
+  document.querySelectorAll("[data-prompt]").forEach((button) => {
+    if (button.dataset.boundPrompt === "1") return;
+    button.dataset.boundPrompt = "1";
+    button.addEventListener("click", () => {
+      if (!chatInput) return;
+      chatInput.value = button.dataset.prompt || "";
+      chatInput.focus();
+      chatInput.dispatchEvent(new Event("input"));
+    });
   });
-});
+}
+
+bindPromptButtons();
+loadChatModels();
+loadChatSession();
+loadChatHistory();
