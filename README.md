@@ -19,6 +19,7 @@ uv sync --extra rag
 
 # Install every optional feature
 uv sync --all-extras
+```
 
 Configure local translation with:
 
