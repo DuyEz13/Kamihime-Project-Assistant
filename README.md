@@ -1,6 +1,8 @@
 # KamiWiki
 
-A simplified wiki website about Kamihime Project that integrates a chatbot to assist with questions about in-game character information or how to build a team and weapon grid.
+A simplified wiki website about Kamihime Project that integrates a chatbot to
+assist with character information. The data pipeline supports the three SSR
+object catalogs: Kamihime, Eidolons, and Weapons.
 
 ## Setup with uv
 
@@ -53,6 +55,7 @@ DEEPL_AUTH_KEY=your_deepl_api_key
 DEEPL_MODEL_TYPE=prefer_quality_optimized
 DEEPL_TRANSLATION_BATCH_SIZE=50
 DEEPL_REQUIRE_GLOSSARY=1
+DEEPL_GLOSSARY_NAME=KamiWiki JA-EN
 ```
 
 Test a few values before running a full update:
@@ -78,19 +81,14 @@ Test a few values before running a full update:
 uv run python scripts/test_translation.py --provider google --element fire --count 5
 ```
 
-To translate the existing Japanese database without crawling the source wiki
-again, open an element page, choose **DeepL**, **Google Translate**, or
-**Qwen** from the provider dropdown, then click **Translate Database**. This
-reads the existing `kami/data/raw/kamihime_*_raw.jsonl` files and rewrites the
-corresponding provider output under
-`kami/data/translated/<provider>/kamihime_*_en.jsonl` only after translation
-succeeds.
-
-Add or correct game terminology in `kami/translation_glossary.json`. For
-example, the default glossary fixes `レイジング状態` as
-`Raging state`. If automatic glossary creation is unavailable for the account,
-set `DEEPL_GLOSSARY_ID` to an existing multilingual glossary ID. Set
-`DEEPL_REQUIRE_GLOSSARY=0` only when testing without terminology enforcement.
+Add or correct game terminology in `kami/translation_glossary.json`. Before
+translation, KamiWiki creates or reuses the stable glossary named by
+`DEEPL_GLOSSARY_NAME` and synchronizes its complete JA-EN dictionary with this
+file. Legacy hash-named KamiWiki glossaries are renamed automatically during
+the first synchronization. To manage a specific existing multilingual
+glossary instead, set `DEEPL_GLOSSARY_ID`; its JA-EN dictionary will be
+synchronized too. Set `DEEPL_REQUIRE_GLOSSARY=0` only when testing without
+terminology enforcement.
 
 Test a small translation sample without rebuilding or overwriting the English
 element files:
@@ -104,9 +102,6 @@ uv run python scripts/test_translation.py `
   --text "敵全体に火属性ダメージ" `
   --text "味方全体のバーストゲージUP"
 ```
-
-Individual source URLs can be overridden with environment variables such as
-`KAMI_SOURCE_URL_FIRE` or `KAMI_SOURCE_URL_WATER`.
 
 Full database crawling is intentionally conservative because the source wiki
 can return HTTP 429 when requests arrive too quickly. The default setup uses
@@ -143,22 +138,32 @@ For a production-style local process:
 uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-The element pages provide two update modes:
+The sidebar groups data into Kamihime, Eidolons, and Weapons. Each catalog
+expands into its supported elements and opens routes such as
+`/catalog/eidolon/phantom` or `/catalog/weapon/fire`. Catalog pages provide
+two update modes:
 
-- **Update latest characters** checks all six list pages, reuses existing detail
-  records, crawls detail pages only for newly discovered entries, and locally
-  translates new or changed text.
-- **Update Database** crawls every character detail page again so edits to
-  existing skills, stats, and flavor text are captured, then rebuilds the
-  translated element files.
+- **Update latest records** checks every configured element list for the
+  selected object type, reuses existing detail records, crawls detail pages
+  only for newly discovered entries, and translates new or changed text.
+- **Update Database** crawls every object detail page again so edits to
+  existing skills, stats, effects, and flavor text are captured, then rebuilds
+  the translated element files.
 
-Existing element files are replaced atomically only after an update succeeds.
-Raw crawl output is stored under `kami/data/raw/` as
-`kamihime_<element>_raw.jsonl`; translated output is stored under
-`kami/data/translated/<provider>/` as `kamihime_<element>_en.jsonl`. The web
-application prefers the provider selected by `KAMI_RENDER_TRANSLATION_PROVIDER`
-or `KAMI_TRANSLATION_PROVIDER`, then falls back to other provider folders and
-finally to raw Japanese data until translation is available.
+Each element file is replaced atomically only after that element crawl
+succeeds, so an empty or failed crawl does not overwrite its previous data.
+Raw and translated data use an object/element layout:
+
+```text
+kami/data/<object_type>/<element>/raw.jsonl
+kami/data/<object_type>/<element>/translated/<provider>.jsonl
+```
+
+`object_type` is `kamihime`, `eidolon`, or `weapon`. Kamihime has six
+elements; Eidolons and Weapons also have `phantom`. The web application
+prefers the provider selected by `KAMI_RENDER_TRANSLATION_PROVIDER` or
+`KAMI_TRANSLATION_PROVIDER`, then falls back to other providers and finally
+to raw Japanese data until translation is available.
 
 ## Project Structure
 
@@ -170,24 +175,27 @@ KamiWiki/
 |   |   |-- wiki.css            # Website layout and component styles
 |   |   `-- wiki.js             # Client-side update status and UI behavior
 |   `-- templates/
-|       |-- base.html            # Shared page layout and element sidebar
+|       |-- base.html            # Shared layout and catalog dropdown sidebar
 |       |-- index.html           # Home and chat-style landing page
-|       |-- element.html         # Character list page for one element
-|       `-- character.html       # Character information and skill page
+|       |-- catalog.html         # Shared object list page for one element
+|       |-- character.html       # Kamihime information and skill page
+|       `-- object_detail.html   # Eidolon and Weapon detail page
 |-- kami/
 |   |-- data/
-|   |   |-- raw/
-|   |   |   `-- kamihime_*_raw.jsonl # Japanese crawl data, split by element
-|   |   |-- translated/
-|   |   |   |-- deepl/                # DeepL translated element JSONL files
-|   |   |   |-- google/               # Google Translate element JSONL files
-|   |   |   `-- qwen/                 # Qwen translated element JSONL files
+|   |   |-- kamihime/                 # Six element folders
+|   |   |   `-- <element>/
+|   |   |       |-- raw.jsonl
+|   |   |       `-- translated/<provider>.jsonl
+|   |   |-- eidolon/                  # Six elements plus Phantom
+|   |   |   `-- <element>/...
+|   |   |-- weapon/                   # Six elements plus Phantom
+|   |   |   `-- <element>/...
 |   |   |-- chat_sessions.json      # Per-conversation chatbot memory
 |   |   `-- .translation_cache.json # Shared translation-memory cache
 |   |-- chatbot.py              # RAG retrieval, chat memory and calls
-|   |-- crawler.py              # Crawls character lists and detail pages
+|   |-- crawler.py              # Crawls all three object catalogs and details
 |   |-- pipeline.py             # Runs latest/full updates in the background
-|   |-- data_store.py           # Loads, normalizes, filters, and finds characters
+|   |-- data_store.py           # Loads and normalizes catalog view models
 |   |-- data_loader.py          # Generic JSONL record iterator
 |   |-- paths.py                # Shared data directory and element file paths
 |   |-- translator.py           # Qwen, DeepL, Google translation pipelines
@@ -198,6 +206,7 @@ KamiWiki/
 |   `-- all_kami_data.json      # Legacy JSON data snapshot
 |-- img/                        # Element icons used by the sidebar
 |-- scripts/
+|   |-- crawl_data.py           # Crawl raw data by object type and element
 |   `-- test_translation.py     # Test a few translations without rebuilding data
 |-- test.ipynb                  # Experimental crawler and data inspection notebook
 |-- .env.example                # Example environment variables

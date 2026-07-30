@@ -16,6 +16,8 @@ const translationDevice = document.getElementById("translation-device");
 const translationModel = document.getElementById("translation-model");
 const crawlProgressPanel = document.getElementById("crawl-progress");
 const crawlProgressList = document.getElementById("crawl-progress-list");
+const catalogPage = document.getElementById("catalog-page");
+const activeObjectType = catalogPage?.dataset.objectType || "kamihime";
 const crawlElements = (crawlProgressPanel?.dataset.elements || "")
   .split(",")
   .map((value) => value.trim())
@@ -175,7 +177,11 @@ updateButtons.forEach((button) => {
     renderCrawlProgress({});
     try {
       const mode = button.dataset.updateMode;
-      const response = await fetch(`/api/update/${mode}`, { method: "POST" });
+      const provider = translationProvider?.value || "deepl";
+      const response = await fetch(
+        `/api/update/${activeObjectType}/${mode}?provider=${encodeURIComponent(provider)}`,
+        { method: "POST" }
+      );
       const body = await response.json();
       if (!response.ok) throw new Error(body.detail || "Update failed to start");
       renderStatus(body);
@@ -200,7 +206,10 @@ translateForm?.addEventListener("submit", async (event) => {
   if (progressPanel) progressPanel.hidden = false;
   try {
     const provider = translationProvider?.value || "deepl";
-    const response = await fetch(`/api/translate/${provider}`, { method: "POST" });
+    const response = await fetch(
+      `/api/translate/${activeObjectType}/${provider}`,
+      { method: "POST" }
+    );
     const body = await response.json();
     if (!response.ok) throw new Error(body.detail || "Translation failed to start");
     renderStatus(body);
@@ -226,6 +235,34 @@ sidebarToggle?.addEventListener("click", () => {
 });
 
 sidebarBackdrop?.addEventListener("click", closeSidebar);
+
+const CATALOG_OPEN_PREFIX = "kamiwiki_catalog_open_";
+document.querySelectorAll("[data-catalog-group]").forEach((group) => {
+  const key = group.dataset.catalogGroup;
+  const toggle = group.querySelector("[data-catalog-toggle]");
+  const panel = group.querySelector("[data-catalog-panel]");
+  if (!key || !toggle || !panel) return;
+
+  function setCatalogOpen(open, persist = true) {
+    toggle.setAttribute("aria-expanded", String(open));
+    panel.hidden = !open;
+    if (persist) {
+      window.localStorage.setItem(`${CATALOG_OPEN_PREFIX}${key}`, String(open));
+    }
+  }
+
+  const containsActiveLink = Boolean(panel.querySelector(".element-link.active"));
+  const saved = window.localStorage.getItem(`${CATALOG_OPEN_PREFIX}${key}`);
+  if (containsActiveLink) {
+    setCatalogOpen(true, false);
+  } else if (saved !== null) {
+    setCatalogOpen(saved === "true", false);
+  }
+
+  toggle.addEventListener("click", () => {
+    setCatalogOpen(toggle.getAttribute("aria-expanded") !== "true");
+  });
+});
 
 document.querySelectorAll(".element-link").forEach((link) => {
   link.addEventListener("click", closeSidebar);

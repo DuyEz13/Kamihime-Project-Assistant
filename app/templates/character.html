@@ -4,7 +4,7 @@
 {% block content %}
 <div class="detail-page element-{{ character.element }}">
   <nav class="breadcrumbs">
-    <a href="/elements/{{ character.element }}">{{ character.element|title }}</a>
+    <a href="/catalog/kamihime/{{ character.element }}">{{ character.element|title }} Kamihime</a>
     <span>/</span>{{ character.name }}
   </nav>
 
@@ -27,8 +27,17 @@
         </div>
         <table class="data-table info-table">
           <tbody>
-            {% for key, value in character.display_info.items() %}
-            <tr><th>{{ key }}</th><td>{{ value }}</td></tr>
+            {% for row in display_info_rows %}
+            <tr>
+              <th>{{ row.label }}</th>
+              <td>
+                {% if row.href %}
+                <a class="object-reference-link" href="{{ row.href }}">{{ row.value }}</a>
+                {% else %}
+                {{ row.value }}
+                {% endif %}
+              </td>
+            </tr>
             {% endfor %}
           </tbody>
         </table>

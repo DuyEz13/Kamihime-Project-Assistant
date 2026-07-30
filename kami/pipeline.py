@@ -2,11 +2,21 @@ import threading
 import copy
 from datetime import datetime, timezone
 
-from .crawler import configured_elements, crawl_all_elements, update_all_elements_latest
+from .crawler import (
+    configured_elements,
+    crawl_all_object_elements,
+    update_all_object_elements_latest,
+)
 from .data_store import DATA_DIR
-from .paths import TRANSLATION_PROVIDERS
-from .translator import translate_elements
+from .paths import (
+    TRANSLATION_PROVIDERS,
+    normalize_object_type,
+    normalize_translation_provider,
+)
+from .translator import translate_object_elements
 
+
+DEFAULT_UPDATE_TRANSLATION_PROVIDER = "deepl"
 
 _lock = threading.Lock()
 _status = {
@@ -16,6 +26,8 @@ _status = {
     "finished_at": None,
     "characters": None,
     "mode": None,
+    "object_type": None,
+    "provider": None,
     "progress": None,
     "processed": None,
     "total": None,
@@ -39,7 +51,7 @@ def _set_status(**values) -> None:
         _status.update(values)
 
 
-def _empty_crawl_progress() -> dict:
+def _empty_crawl_progress(object_type: str = "kamihime") -> dict:
     return {
         element: {
             "processed": 0,
@@ -48,7 +60,7 @@ def _empty_crawl_progress() -> dict:
             "character": "",
             "url": "",
         }
-        for element in configured_elements()
+        for element in configured_elements(object_type)
     }
 
 
@@ -90,7 +102,7 @@ def _crawl_progress(progress: dict) -> None:
                 "processed": overall_processed,
                 "total": overall_total,
                 "message": (
-                    f"Crawling character details: "
+                    f"Crawling object details: "
                     f"{overall_processed}/{overall_total}"
                     f"{suffix}"
                 ),
@@ -116,19 +128,26 @@ def _translation_progress(progress: dict) -> None:
     )
 
 
-def _run_update(mode: str) -> None:
+def _run_update(mode: str, object_type: str, provider: str) -> None:
     try:
         if mode == "latest":
             _set_status(
                 state="updating",
                 mode=mode,
-                message="Checking element lists for new characters...",
-                crawl_progress=_empty_crawl_progress(),
+                object_type=object_type,
+                message=(
+                    f"Checking {object_type} element lists for new records..."
+                ),
+                crawl_progress=_empty_crawl_progress(object_type),
                 progress=0,
                 processed=0,
                 total=0,
             )
-            results = update_all_elements_latest(DATA_DIR, _crawl_progress)
+            results = update_all_object_elements_latest(
+                object_type,
+                DATA_DIR,
+                _crawl_progress,
+            )
             total = sum(result["entries"] for result in results.values())
             new_entries = sum(result["new_entries"] for result in results.values())
             crawled_details = sum(
@@ -143,10 +162,12 @@ def _run_update(mode: str) -> None:
                 message="Translating updated element data...",
                 progress=0,
             )
-            translated = translate_elements(
+            translated = translate_object_elements(
                 DATA_DIR,
+                object_type,
                 results,
                 _translation_progress,
+                provider=provider,
             )
             message = (
                 f"Latest update completed: {new_entries} new entries, "
@@ -158,23 +179,30 @@ def _run_update(mode: str) -> None:
             _set_status(
                 state="updating",
                 mode=mode,
-                message="Rebuilding the full character database...",
-                crawl_progress=_empty_crawl_progress(),
+                object_type=object_type,
+                message=f"Rebuilding the full {object_type} database...",
+                crawl_progress=_empty_crawl_progress(object_type),
                 progress=0,
                 processed=0,
                 total=0,
             )
-            counts = crawl_all_elements(DATA_DIR, _crawl_progress)
+            counts = crawl_all_object_elements(
+                object_type,
+                DATA_DIR,
+                _crawl_progress,
+            )
             _set_status(
                 state="translating",
                 mode=mode,
                 message="Translating the rebuilt database...",
                 progress=0,
             )
-            translated = translate_elements(
+            translated = translate_object_elements(
                 DATA_DIR,
+                object_type,
                 counts,
                 _translation_progress,
+                provider=provider,
             )
             total = sum(counts.values())
             summary = ", ".join(
@@ -204,20 +232,25 @@ def _run_update(mode: str) -> None:
         )
 
 
-def _run_translation(provider: str) -> None:
+def _run_translation(provider: str, object_type: str) -> None:
     try:
-        elements = configured_elements()
+        elements = configured_elements(object_type)
         _set_status(
             state="translating",
             mode="translate",
-            message=f"Translating existing raw database with {provider}...",
+            object_type=object_type,
+            message=(
+                f"Translating existing {object_type} raw database "
+                f"with {provider}..."
+            ),
             progress=0,
             processed=0,
             total=0,
             crawl_progress={},
         )
-        translated = translate_elements(
+        translated = translate_object_elements(
             DATA_DIR,
+            object_type,
             elements,
             _translation_progress,
             provider=provider,
@@ -246,7 +279,15 @@ def _run_translation(provider: str) -> None:
         )
 
 
-def start_update(mode: str) -> bool:
+def start_update(
+    mode: str,
+    object_type: str = "kamihime",
+    provider: str = DEFAULT_UPDATE_TRANSLATION_PROVIDER,
+) -> bool:
+    if mode not in {"latest", "database"}:
+        raise ValueError("Update mode must be latest or database")
+    selected_object_type = normalize_object_type(object_type)
+    selected_provider = normalize_translation_provider(provider)
     with _lock:
         if _status["state"] in {"starting", "updating", "translating"}:
             return False
@@ -254,7 +295,12 @@ def start_update(mode: str) -> bool:
             {
                 "state": "starting",
                 "mode": mode,
-                "message": f"Starting {mode} update...",
+                "object_type": selected_object_type,
+                "provider": selected_provider,
+                "message": (
+                    f"Starting {mode} {selected_object_type} update "
+                    f"with {selected_provider} translation..."
+                ),
                 "started_at": _now(),
                 "finished_at": None,
                 "characters": None,
@@ -267,13 +313,21 @@ def start_update(mode: str) -> bool:
             }
         )
 
-    thread = threading.Thread(target=_run_update, args=(mode,), daemon=True)
+    thread = threading.Thread(
+        target=_run_update,
+        args=(mode, selected_object_type, selected_provider),
+        daemon=True,
+    )
     thread.start()
     return True
 
 
-def start_translation(provider: str) -> bool:
+def start_translation(
+    provider: str,
+    object_type: str = "kamihime",
+) -> bool:
     provider = provider.strip().lower()
+    selected_object_type = normalize_object_type(object_type)
     if provider not in TRANSLATION_PROVIDERS:
         raise ValueError(
             "Translation provider must be one of: "
@@ -286,7 +340,11 @@ def start_translation(provider: str) -> bool:
             {
                 "state": "starting",
                 "mode": "translate",
-                "message": f"Starting {provider} translation...",
+                "object_type": selected_object_type,
+                "message": (
+                    f"Starting {provider} translation for "
+                    f"{selected_object_type}..."
+                ),
                 "started_at": _now(),
                 "finished_at": None,
                 "characters": None,
@@ -299,7 +357,11 @@ def start_translation(provider: str) -> bool:
             }
         )
 
-    thread = threading.Thread(target=_run_translation, args=(provider,), daemon=True)
+    thread = threading.Thread(
+        target=_run_translation,
+        args=(provider, selected_object_type),
+        daemon=True,
+    )
     thread.start()
     return True
 

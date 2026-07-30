@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% block title %}{{ element.label }} {{ catalog.label }} | KamiWiki{% endblock %}
+{% block topbar_title %}{{ element.label }} {{ catalog.label }}{% endblock %}
+{% block content %}
+<section
+  id="catalog-page"
+  class="library-page element-{{ element.key }}"
+  data-object-type="{{ catalog.key }}"
+>
+  <div class="library-header">
+    <div class="element-title">
+      <img src="/img/{{ element.image }}" alt="">
+      <div>
+        <p class="section-kicker">{{ catalog.singular }} archive</p>
+        <h1>{{ element.label }} {{ catalog.label }}</h1>
+        <p>{{ objects|length }} entries in the current dataset.</p>
+      </div>
+    </div>
+    <div class="update-actions">
+      <button
+        class="refresh-button update-button"
+        data-update-mode="latest"
+        type="button"
+      >Update latest records</button>
+      <button
+        class="refresh-button secondary update-button"
+        data-update-mode="database"
+        type="button"
+      >Update Database</button>
+    </div>
+  </div>
+
+  <div class="database-tools">
+    <div class="tool-copy">
+      <p class="tool-kicker">Translation</p>
+      <h2>Translate existing {{ catalog.label|lower }} database</h2>
+      <p>Use the current Japanese raw JSONL files and rebuild English data without crawling the wiki again.</p>
+    </div>
+    <form id="translate-form" class="translate-form">
+      <label class="provider-field">
+        <span>Provider</span>
+        <select id="translation-provider" class="provider-select" aria-label="Translation provider">
+          <option value="deepl" selected>DeepL</option>
+          <option value="google">Google Translate</option>
+          <option value="qwen">Qwen</option>
+        </select>
+      </label>
+      <button
+        id="translate-database"
+        class="refresh-button translate-button"
+        type="submit"
+      >Translate Database</button>
+    </form>
+  </div>
+
+  <div id="refresh-status" class="status" data-state="{{ refresh.state }}">
+    <div id="refresh-message">{{ refresh.message }}</div>
+    <div
+      id="crawl-progress"
+      class="crawl-progress"
+      data-elements="{% for item in catalog.elements %}{{ item.key }}{% if not loop.last %},{% endif %}{% endfor %}"
+      {% if refresh.state not in ["starting", "updating"] %}hidden{% endif %}
+    >
+      <div class="progress-section-title">Crawl progress</div>
+      <div id="crawl-progress-list" class="crawl-progress-list">
+        {% for element_item in catalog.elements %}
+        {% set progress_item = (refresh.crawl_progress or {}).get(element_item.key, {}) %}
+        <div class="crawl-progress-item" data-element="{{ element_item.key }}">
+          <div class="progress-meta">
+            <span class="crawl-element-label">{{ element_item.label }}</span>
+            <span class="crawl-count">{{ progress_item.processed or 0 }}/{{ progress_item.total or 0 }}</span>
+          </div>
+          <div
+            class="progress-track"
+            role="progressbar"
+            aria-label="{{ element_item.label }} crawl progress"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow="{{ progress_item.progress or 0 }}"
+          >
+            <div
+              data-progress-fill
+              class="progress-fill"
+              style="width: {{ progress_item.progress or 0 }}%"
+            ></div>
+          </div>
+          <div class="progress-model crawl-current">{{ progress_item.character or "" }}</div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    <div
+      id="translation-progress"
+      class="translation-progress"
+      {% if refresh.state != "translating" %}hidden{% endif %}
+    >
+      <div class="progress-meta">
+        <span id="translation-device">{{ refresh.device or "Detecting device..." }}</span>
+        <span id="translation-percent">{{ refresh.progress or 0 }}%</span>
+      </div>
+      <div
+        class="progress-track"
+        role="progressbar"
+        aria-label="Translation progress"
+        aria-valuemin="0"
+        aria-valuemax="100"
+        aria-valuenow="{{ refresh.progress or 0 }}"
+      >
+        <div
+          id="translation-progress-bar"
+          class="progress-fill"
+          style="width: {{ refresh.progress or 0 }}%"
+        ></div>
+      </div>
+      <div id="translation-model" class="progress-model">
+        {{ refresh.model or "" }}
+      </div>
+    </div>
+  </div>
+
+  <form class="library-search" method="get">
+    <input name="q" value="{{ query }}" placeholder="Search {{ element.label }} {{ catalog.label|lower }}..." aria-label="Search {{ catalog.label|lower }}">
+    <button type="submit">Search</button>
+    {% if query %}<a href="/catalog/{{ catalog.key }}/{{ element.key }}">Clear</a>{% endif %}
+  </form>
+
+  {% if objects %}
+  <div class="character-table-wrap">
+    <table class="character-list-table">
+      <thead>
+        <tr>
+          <th class="image-column">Image</th>
+          <th>{{ catalog.singular }}</th>
+          <th class="date-column">Release date</th>
+          <th>Acquisition method</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in objects %}
+        <tr>
+          <td class="character-list-image">
+            <a href="/objects/{{ catalog.key }}/{{ item.slug }}">
+              {% if item.list_image %}
+              <img src="{{ item.list_image }}" alt="{{ item.name }}" loading="lazy">
+              {% else %}
+              <span class="image-placeholder">K</span>
+              {% endif %}
+            </a>
+          </td>
+          <td class="character-name-cell">
+            <a href="/objects/{{ catalog.key }}/{{ item.slug }}">{{ item.name }}</a>
+          </td>
+          <td class="date-cell">{{ item.release_date }}</td>
+          <td class="acquisition-cell">{{ item.acquisition_method }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="empty-state">No matching {{ catalog.label|lower }} found.</p>
+  {% endif %}
+</section>
+{% endblock %}

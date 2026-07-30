@@ -18,20 +18,35 @@ def _stringify_value(value: Any) -> str:
 
 def _record_to_text(record: dict) -> str:
     info = record.get("info") if isinstance(record.get("info"), dict) else {}
-    skills = record.get("skill") if isinstance(record.get("skill"), list) else []
 
     lines: List[str] = []
     if info:
-        lines.append("Character info:")
+        lines.append("Object info:")
         lines.extend(f"{key}: {_stringify_value(value)}" for key, value in info.items())
 
-    if skills:
-        lines.append("Skills:")
-        for skill in skills:
-            if isinstance(skill, dict):
-                lines.append("; ".join(f"{key}: {_stringify_value(value)}" for key, value in skill.items()))
+    sections = (
+        ("skill", "Skills"),
+        ("skills", "Skills"),
+        ("stats", "Stats"),
+        ("bursts", "Bursts"),
+        ("weapon_skills", "Weapon skills"),
+        ("eidolon_effects", "Eidolon effects"),
+    )
+    for key, label in sections:
+        values = record.get(key)
+        if not isinstance(values, list) or not values:
+            continue
+        lines.append(f"{label}:")
+        for value in values:
+            if isinstance(value, dict):
+                lines.append(
+                    "; ".join(
+                        f"{item_key}: {_stringify_value(item_value)}"
+                        for item_key, item_value in value.items()
+                    )
+                )
             else:
-                lines.append(_stringify_value(skill))
+                lines.append(_stringify_value(value))
 
     flavor = record.get("flavor")
     if flavor:

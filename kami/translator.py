@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -11,9 +12,10 @@ import httpx
 
 from .paths import (
     TRANSLATION_PROVIDERS,
-    element_raw_path,
-    element_translation_path,
     normalize_translation_provider,
+    normalize_object_type,
+    object_raw_path,
+    object_translation_path,
 )
 
 
@@ -38,6 +40,9 @@ KEY_TRANSLATIONS = {
     "実装日": "Release Date",
     "入手方法": "Acquisition Method",
     "解放武器": "Unlock Weapon",
+    "解放神姫": "Unlock Kamihime",
+    "種類": "Weapon Type",
+    "還元": "Returns",
     "真化ボーナス": "Finalization Bonus",
     "進化": "Evolution",
     "バースト": "Burst",
@@ -56,7 +61,10 @@ PRESERVED_VALUE_KEYS = {
     "icon",
     "list_image",
     "element",
+    "object_type",
     "release_date",
+    "unlock_weapon_url",
+    "unlock_kamihime_url",
 }
 
 SYSTEM_PROMPT = """You are the English localization engine for the game Kamihime Project.
@@ -591,6 +599,8 @@ class LocalJapaneseEnglishTranslator:
 
 
 class DeepLJapaneseEnglishTranslator(LocalJapaneseEnglishTranslator):
+    DEFAULT_GLOSSARY_NAME = "KamiWiki JA-EN"
+
     def __init__(
         self,
         data_dir: Path,
@@ -632,48 +642,153 @@ class DeepLJapaneseEnglishTranslator(LocalJapaneseEnglishTranslator):
             ) from exc
         self._client = deepl.DeepLClient(auth_key)
 
+    def _glossary_name(self) -> str:
+        name = os.getenv(
+            "DEEPL_GLOSSARY_NAME",
+            self.DEFAULT_GLOSSARY_NAME,
+        ).strip()
+        if not name:
+            raise ValueError("DEEPL_GLOSSARY_NAME must not be empty")
+        return name
+
+    @staticmethod
+    def _has_ja_en_dictionary(glossary: Any) -> bool:
+        return any(
+            str(getattr(item, "source_lang", "")).upper() == "JA"
+            and str(getattr(item, "target_lang", "")).upper() == "EN"
+            for item in (getattr(glossary, "dictionaries", None) or [])
+        )
+
+    @staticmethod
+    def _remote_glossary_entries(entries: Any) -> dict[str, str]:
+        if isinstance(entries, Mapping):
+            return {
+                str(key): str(value)
+                for key, value in entries.items()
+            }
+        if isinstance(entries, bytes):
+            entries = entries.decode("utf-8")
+        if isinstance(entries, str):
+            from deepl.util import convert_tsv_to_dict
+
+            return {
+                str(key): str(value)
+                for key, value in convert_tsv_to_dict(
+                    entries,
+                    skip_checks=True,
+                ).items()
+            }
+        raise TypeError(
+            "DeepL glossary entries must be a mapping or TSV string, "
+            f"got {type(entries).__name__}"
+        )
+
+    def _sync_glossary_dictionary(self, glossary: Any) -> Any:
+        from deepl.api_data import MultilingualGlossaryDictionaryEntries
+
+        dictionary = MultilingualGlossaryDictionaryEntries(
+            "JA",
+            "EN",
+            self.glossary,
+        )
+        if not self._has_ja_en_dictionary(glossary):
+            return self._client.update_multilingual_glossary_dictionary(
+                glossary,
+                dictionary,
+            )
+
+        response = self._client.get_multilingual_glossary_entries(
+            glossary,
+            "JA",
+            "EN",
+        )
+        remote_entries: dict[str, str] = {}
+        for remote_dictionary in response.dictionaries:
+            if (
+                str(remote_dictionary.source_lang).upper() == "JA"
+                and str(remote_dictionary.target_lang).upper() == "EN"
+            ):
+                remote_entries = self._remote_glossary_entries(
+                    remote_dictionary.entries
+                )
+                break
+        if remote_entries != self.glossary:
+            self._client.replace_multilingual_glossary_dictionary(
+                glossary,
+                dictionary,
+            )
+        return glossary
+
+    def _find_or_create_managed_glossary(self) -> Any:
+        from deepl.api_data import MultilingualGlossaryDictionaryEntries
+
+        glossary_name = self._glossary_name()
+        glossaries = self._client.list_multilingual_glossaries()
+        exact = next(
+            (
+                glossary
+                for glossary in glossaries
+                if glossary.name == glossary_name
+            ),
+            None,
+        )
+        if exact is not None:
+            return exact
+
+        legacy_prefix = f"{glossary_name} "
+        legacy = [
+            glossary
+            for glossary in glossaries
+            if glossary.name.startswith(legacy_prefix)
+        ]
+        if legacy:
+            selected = max(
+                legacy,
+                key=lambda glossary: str(
+                    getattr(glossary, "creation_time", "")
+                ),
+            )
+            return self._client.update_multilingual_glossary_name(
+                selected,
+                glossary_name,
+            )
+
+        dictionary = MultilingualGlossaryDictionaryEntries(
+            "JA",
+            "EN",
+            self.glossary,
+        )
+        return self._client.create_multilingual_glossary(
+            glossary_name,
+            [dictionary],
+        )
+
     def _ensure_glossary(self) -> Any | None:
         if self._deepl_glossary is not None:
             return self._deepl_glossary
-        configured_id = os.getenv("DEEPL_GLOSSARY_ID")
-        if configured_id:
-            self._deepl_glossary = configured_id
-            return configured_id
         if not self.glossary:
             return None
 
         self._load_client()
         try:
-            from deepl.api_data import (
-                MultilingualGlossaryDictionaryEntries,
-            )
-
-            glossary_name = (
-                "KamiWiki JA-EN "
-                + self.cache_namespace.rsplit(":", 1)[-1]
-            )
-            for glossary in self._client.list_multilingual_glossaries():
-                if glossary.name == glossary_name:
-                    self._deepl_glossary = glossary
-                    return glossary
-
-            dictionary = MultilingualGlossaryDictionaryEntries(
-                "JA",
-                "EN",
-                self.glossary,
-            )
-            self._deepl_glossary = (
-                self._client.create_multilingual_glossary(
-                    glossary_name,
-                    [dictionary],
+            configured_id = os.getenv("DEEPL_GLOSSARY_ID", "").strip()
+            if configured_id:
+                glossary = self._client.get_multilingual_glossary(
+                    configured_id
                 )
+            else:
+                glossary = self._find_or_create_managed_glossary()
+            self._deepl_glossary = self._sync_glossary_dictionary(
+                glossary
             )
             return self._deepl_glossary
         except Exception as exc:
             if os.getenv("DEEPL_REQUIRE_GLOSSARY", "1") != "0":
+                detail = str(exc).strip() or "No details returned by DeepL"
                 raise RuntimeError(
-                    "Could not create or access the DeepL JA-EN glossary. "
-                    "Set DEEPL_GLOSSARY_ID to an existing glossary or "
+                    "Could not synchronize the DeepL JA-EN glossary. "
+                    f"DeepL error: {type(exc).__name__}: {detail}. "
+                    "Check DEEPL_GLOSSARY_ID/DEEPL_GLOSSARY_NAME, or set "
                     "DEEPL_REQUIRE_GLOSSARY=0 to continue without one."
                 ) from exc
             return None
@@ -902,12 +1017,14 @@ def create_translator(
     )
 
 
-def translate_elements(
+def translate_object_elements(
     data_dir: Path,
+    object_type: str,
     elements: Iterable[str],
     progress_callback: ProgressCallback | None = None,
     provider: str | None = None,
 ) -> dict[str, int]:
+    selected_object_type = normalize_object_type(object_type)
     selected_provider = normalize_translation_provider(
         provider or os.getenv("KAMI_TRANSLATION_PROVIDER") or DEFAULT_PROVIDER
     )
@@ -916,7 +1033,11 @@ def translate_elements(
     all_texts: list[str] = []
     normalized_elements = [element.strip().lower() for element in elements]
     for normalized in normalized_elements:
-        source = element_raw_path(data_dir, normalized)
+        source = object_raw_path(
+            data_dir,
+            selected_object_type,
+            normalized,
+        )
         if not source.exists():
             raise FileNotFoundError(f"Raw data file not found: {source}")
         records = _read_jsonl(source)
@@ -933,10 +1054,31 @@ def translate_elements(
         ]
         _atomic_write_jsonl(
             translated,
-            element_translation_path(data_dir, normalized, selected_provider),
+            object_translation_path(
+                data_dir,
+                selected_object_type,
+                normalized,
+                selected_provider,
+            ),
         )
         counts[normalized] = len(translated)
     return counts
+
+
+def translate_elements(
+    data_dir: Path,
+    elements: Iterable[str],
+    progress_callback: ProgressCallback | None = None,
+    provider: str | None = None,
+) -> dict[str, int]:
+    """Backward-compatible Kamihime element translation."""
+    return translate_object_elements(
+        data_dir,
+        "kamihime",
+        elements,
+        progress_callback,
+        provider,
+    )
 
 
 def translate_jsonl(source: Path, destination: Path) -> int:

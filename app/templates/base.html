@@ -19,16 +19,41 @@
           New chat
         </a>
 
-        <p class="sidebar-label">Elements</p>
-        <nav class="element-nav" aria-label="Elements">
-          {% for item in elements %}
-          <a
-            class="element-link {% if active_element == item.key %}active{% endif %}"
-            href="/elements/{{ item.key }}"
+        <p class="sidebar-label">Game data</p>
+        <nav class="catalog-nav" aria-label="Game data catalogs">
+          {% for catalog_item in catalogs %}
+          {% set catalog_open = active_object_type == catalog_item.key %}
+          <section
+            class="catalog-nav-group"
+            data-catalog-group="{{ catalog_item.key }}"
           >
-            <img src="/img/{{ item.image }}" alt="">
-            <span>{{ item.label }}</span>
-          </a>
+            <button
+              class="catalog-toggle"
+              type="button"
+              data-catalog-toggle
+              aria-expanded="{{ 'true' if catalog_open else 'false' }}"
+              aria-controls="catalog-panel-{{ catalog_item.key }}"
+            >
+              <span>{{ catalog_item.label }}</span>
+              <span class="catalog-chevron" aria-hidden="true">⌄</span>
+            </button>
+            <div
+              id="catalog-panel-{{ catalog_item.key }}"
+              class="element-nav catalog-panel"
+              data-catalog-panel
+              {% if not catalog_open %}hidden{% endif %}
+            >
+              {% for item in catalog_item.elements %}
+              <a
+                class="element-link {% if active_object_type == catalog_item.key and active_element == item.key %}active{% endif %}"
+                href="/catalog/{{ catalog_item.key }}/{{ item.key }}"
+              >
+                <img src="/img/{{ item.image }}" alt="">
+                <span>{{ item.label }}</span>
+              </a>
+              {% endfor %}
+            </div>
+          </section>
           {% endfor %}
         </nav>
       </div>

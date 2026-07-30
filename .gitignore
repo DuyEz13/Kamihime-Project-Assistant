@@ -28,3 +28,6 @@ kami/data/chat_sessions.json
 # OS files
 .DS_Store
 Thumbs.db
+
+# Other
+tasks.txt

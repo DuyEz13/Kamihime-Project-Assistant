@@ -1,4 +1,5 @@
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
@@ -14,9 +15,16 @@ from kami.chatbot import (
     get_session,
     list_sessions,
 )
-from kami.data_store import get_character, load_characters
+from kami.data_store import (
+    get_catalog_item,
+    load_catalog_items,
+)
 from kami.pipeline import get_refresh_status, start_translation, start_update
-from kami.paths import TRANSLATION_PROVIDERS
+from kami.paths import (
+    OBJECT_ELEMENTS,
+    TRANSLATION_PROVIDERS,
+    normalize_object_type,
+)
 
 
 load_dotenv()
@@ -28,14 +36,40 @@ ASSET_VERSION = str(
         (BASE_DIR / "static" / "wiki.js").stat().st_mtime_ns,
     )
 )
-ELEMENTS = (
-    {"key": "fire", "label": "Fire", "image": "火.jpg"},
-    {"key": "water", "label": "Water", "image": "水.jpg"},
-    {"key": "wind", "label": "Wind", "image": "風.jpg"},
-    {"key": "thunder", "label": "Thunder", "image": "雷.jpg"},
-    {"key": "light", "label": "Light", "image": "光.jpg"},
-    {"key": "dark", "label": "Dark", "image": "闇.jpg"},
+ELEMENTS = {
+    "fire": {"key": "fire", "label": "Fire", "image": "火.jpg"},
+    "water": {"key": "water", "label": "Water", "image": "水.jpg"},
+    "wind": {"key": "wind", "label": "Wind", "image": "風.jpg"},
+    "thunder": {"key": "thunder", "label": "Thunder", "image": "雷.jpg"},
+    "light": {"key": "light", "label": "Light", "image": "光.jpg"},
+    "dark": {"key": "dark", "label": "Dark", "image": "闇.jpg"},
+    "phantom": {
+        "key": "phantom",
+        "label": "Phantom",
+        "image": "幻.webp",
+    },
+}
+CATALOGS = (
+    {
+        "key": "kamihime",
+        "label": "Kamihime",
+        "singular": "Kamihime",
+        "elements": tuple(ELEMENTS[key] for key in OBJECT_ELEMENTS["kamihime"]),
+    },
+    {
+        "key": "eidolon",
+        "label": "Eidolons",
+        "singular": "Eidolon",
+        "elements": tuple(ELEMENTS[key] for key in OBJECT_ELEMENTS["eidolon"]),
+    },
+    {
+        "key": "weapon",
+        "label": "Weapons",
+        "singular": "Weapon",
+        "elements": tuple(ELEMENTS[key] for key in OBJECT_ELEMENTS["weapon"]),
+    },
 )
+CATALOG_BY_KEY = {catalog["key"]: catalog for catalog in CATALOGS}
 
 app = FastAPI(title="KamiWiki")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
@@ -54,14 +88,86 @@ class ChatRequest(BaseModel):
     provider: str = "gpt"
 
 
+def _navigation_context(
+    active_object_type: str | None = None,
+    active_element: str | None = None,
+) -> dict:
+    return {
+        "catalogs": CATALOGS,
+        "active_object_type": active_object_type,
+        "active_element": active_element,
+    }
+
+
+def _source_url_key(value: str | None) -> tuple[str, str] | None:
+    if not value:
+        return None
+    parsed = urlsplit(str(value).strip())
+    if not parsed.netloc or not parsed.path:
+        return None
+    return (
+        parsed.netloc.casefold(),
+        unquote(parsed.path).rstrip("/").casefold(),
+    )
+
+
+def _display_info_rows(item: dict) -> list[dict[str, str | None]]:
+    link_fields = {
+        "Unlock Weapon": ("unlock_weapon_url", "weapon"),
+        "解放武器": ("unlock_weapon_url", "weapon"),
+        "Unlock Kamihime": ("unlock_kamihime_url", "kamihime"),
+        "解放神姫": ("unlock_kamihime_url", "kamihime"),
+    }
+    info = item.get("info") if isinstance(item.get("info"), dict) else {}
+    display_info = (
+        item.get("display_info")
+        if isinstance(item.get("display_info"), dict)
+        else {}
+    )
+    rows: list[dict[str, str | None]] = []
+    target_indexes: dict[str, dict[tuple[str, str], dict]] = {}
+
+    for label, value in display_info.items():
+        href = None
+        link_config = link_fields.get(str(label))
+        if link_config is not None:
+            url_field, target_type = link_config
+            target_key = _source_url_key(info.get(url_field))
+            if target_key is not None:
+                if target_type not in target_indexes:
+                    target_indexes[target_type] = {
+                        source_key: target
+                        for target in load_catalog_items(target_type)
+                        if (
+                            source_key := _source_url_key(
+                                target.get("info", {}).get("source_url")
+                            )
+                        )
+                        is not None
+                    }
+                target = target_indexes[target_type].get(target_key)
+                if target is not None:
+                    href = (
+                        f"/objects/{target_type}/"
+                        f"{target['slug']}"
+                    )
+        rows.append(
+            {
+                "label": str(label),
+                "value": str(value),
+                "href": href,
+            }
+        )
+    return rows
+
+
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
     return templates.TemplateResponse(
         request=request,
         name="index.html",
         context={
-            "elements": ELEMENTS,
-            "active_element": None,
+            **_navigation_context(),
             "refresh": get_refresh_status(),
         },
     )
@@ -115,34 +221,46 @@ def chat(request: ChatRequest):
 
 @app.get("/elements/{element}", response_class=HTMLResponse)
 def element_characters(request: Request, element: str, q: str = ""):
-    element_meta = next(
-        (item for item in ELEMENTS if item["key"] == element),
-        None,
-    )
-    if element_meta is None:
+    """Backward-compatible Kamihime catalog route."""
+    return catalog_items(request, "kamihime", element, q)
+
+
+@app.get(
+    "/catalog/{object_type}/{element}",
+    response_class=HTMLResponse,
+)
+def catalog_items(
+    request: Request,
+    object_type: str,
+    element: str,
+    q: str = "",
+):
+    try:
+        selected_object_type = normalize_object_type(object_type)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if element not in OBJECT_ELEMENTS[selected_object_type]:
         raise HTTPException(status_code=404, detail="Element not found")
 
-    characters = [
-        character
-        for character in load_characters()
-        if character["element"] == element
-    ]
+    catalog = CATALOG_BY_KEY[selected_object_type]
+    element_meta = ELEMENTS[element]
+    objects = load_catalog_items(selected_object_type, element)
     query = q.strip().casefold()
     if query:
-        characters = [
-            character
-            for character in characters
-            if query in character["name"].casefold()
+        objects = [
+            item
+            for item in objects
+            if query in item["name"].casefold()
         ]
 
     return templates.TemplateResponse(
         request=request,
-        name="element.html",
+        name="catalog.html",
         context={
-            "elements": ELEMENTS,
-            "active_element": element,
+            **_navigation_context(selected_object_type, element),
+            "catalog": catalog,
             "element": element_meta,
-            "characters": characters,
+            "objects": objects,
             "query": q,
             "refresh": get_refresh_status(),
         },
@@ -151,26 +269,73 @@ def element_characters(request: Request, element: str, q: str = ""):
 
 @app.get("/characters/{slug}", response_class=HTMLResponse)
 def character_detail(request: Request, slug: str):
-    character = get_character(slug)
-    if character is None:
-        raise HTTPException(status_code=404, detail="Character not found")
+    """Backward-compatible Kamihime detail route."""
+    return object_detail(request, "kamihime", slug)
+
+
+@app.get(
+    "/objects/{object_type}/{slug}",
+    response_class=HTMLResponse,
+)
+def object_detail(request: Request, object_type: str, slug: str):
+    try:
+        selected_object_type = normalize_object_type(object_type)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    item = get_catalog_item(selected_object_type, slug)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Object not found")
+    catalog = CATALOG_BY_KEY[selected_object_type]
 
     return templates.TemplateResponse(
         request=request,
-        name="character.html",
+        name=(
+            "character.html"
+            if selected_object_type == "kamihime"
+            else "object_detail.html"
+        ),
         context={
-            "elements": ELEMENTS,
-            "active_element": character["element"],
-            "character": character,
+            **_navigation_context(
+                selected_object_type,
+                item["element"],
+            ),
+            "catalog": catalog,
+            "item": item,
+            "character": item,
+            "display_info_rows": _display_info_rows(item),
         },
     )
 
 
 @app.post("/api/update/{mode}", status_code=202)
-def update_data(mode: str):
+def update_data(mode: str, provider: str = "deepl"):
     if mode not in {"latest", "database"}:
         raise HTTPException(status_code=404, detail="Update mode not found")
-    started = start_update(mode)
+    selected_provider = provider.strip().lower()
+    if selected_provider not in TRANSLATION_PROVIDERS:
+        raise HTTPException(status_code=404, detail="Translation provider not found")
+    started = start_update(mode, provider=selected_provider)
+    if not started:
+        raise HTTPException(status_code=409, detail="An update is already running")
+    return get_refresh_status()
+
+
+@app.post("/api/update/{object_type}/{mode}", status_code=202)
+def update_object_data(
+    object_type: str,
+    mode: str,
+    provider: str = "deepl",
+):
+    if mode not in {"latest", "database"}:
+        raise HTTPException(status_code=404, detail="Update mode not found")
+    selected_provider = provider.strip().lower()
+    if selected_provider not in TRANSLATION_PROVIDERS:
+        raise HTTPException(status_code=404, detail="Translation provider not found")
+    try:
+        selected_object_type = normalize_object_type(object_type)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    started = start_update(mode, selected_object_type, selected_provider)
     if not started:
         raise HTTPException(status_code=409, detail="An update is already running")
     return get_refresh_status()
@@ -186,6 +351,20 @@ def translate_database(provider: str):
     if provider not in TRANSLATION_PROVIDERS:
         raise HTTPException(status_code=404, detail="Translation provider not found")
     started = start_translation(provider)
+    if not started:
+        raise HTTPException(status_code=409, detail="An update is already running")
+    return get_refresh_status()
+
+
+@app.post("/api/translate/{object_type}/{provider}", status_code=202)
+def translate_object_database(object_type: str, provider: str):
+    if provider not in TRANSLATION_PROVIDERS:
+        raise HTTPException(status_code=404, detail="Translation provider not found")
+    try:
+        selected_object_type = normalize_object_type(object_type)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    started = start_translation(provider, selected_object_type)
     if not started:
         raise HTTPException(status_code=409, detail="An update is already running")
     return get_refresh_status()

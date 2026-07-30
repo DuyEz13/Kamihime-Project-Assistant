@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 from kami.translator import (
     DeepLJapaneseEnglishTranslator,
@@ -10,8 +11,14 @@ from kami.translator import (
     _extract_json_array,
     create_translator,
     translate_elements,
+    translate_object_elements,
 )
-from kami.paths import element_raw_path, element_translation_path
+from kami.paths import (
+    element_raw_path,
+    element_translation_path,
+    object_raw_path,
+    object_translation_path,
+)
 from kami.data_store import _display_info
 
 
@@ -31,6 +38,7 @@ def test_translator_preserves_structural_values_and_translates_schema(tmp_path):
         "info": {
             "name": "闇魔",
             "source_url": "https://example.test/闇魔",
+            "unlock_weapon_url": "https://example.test/武器/SSR/闇剣",
             "img": "https://example.test/image.jpg",
             "element": "dark",
             "実装日": "16/10/07",
@@ -48,6 +56,10 @@ def test_translator_preserves_structural_values_and_translates_schema(tmp_path):
 
     assert translated["info"]["name"] == "Dark Fiend"
     assert translated["info"]["source_url"] == record["info"]["source_url"]
+    assert (
+        translated["info"]["unlock_weapon_url"]
+        == record["info"]["unlock_weapon_url"]
+    )
     assert translated["info"]["img"] == record["info"]["img"]
     assert translated["info"]["element"] == "dark"
     assert translated["info"]["Release Date"] == "16/10/07"
@@ -96,12 +108,46 @@ def test_translation_paths_are_split_by_provider(tmp_path):
         tmp_path,
         "fire",
         "deepl",
-    ) == tmp_path / "translated" / "deepl" / "kamihime_fire_en.jsonl"
-    assert element_translation_path(
+    ) == tmp_path / "kamihime" / "fire" / "translated" / "deepl.jsonl"
+    assert object_translation_path(
         tmp_path,
+        "weapon",
         "fire",
         "google",
-    ) == tmp_path / "translated" / "google" / "kamihime_fire_en.jsonl"
+    ) == tmp_path / "weapon" / "fire" / "translated" / "google.jsonl"
+
+
+def test_translate_object_elements_keeps_object_data_separate(tmp_path):
+    source = object_raw_path(tmp_path, "eidolon", "phantom")
+    destination = object_translation_path(
+        tmp_path,
+        "eidolon",
+        "phantom",
+        "qwen",
+    )
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        json.dumps(
+            {
+                "info": {
+                    "name": "Test Eidolon",
+                    "object_type": "eidolon",
+                    "element": "phantom",
+                }
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert translate_object_elements(
+        tmp_path,
+        "eidolon",
+        ["phantom"],
+        provider="qwen",
+    ) == {"phantom": 1}
+    assert destination.exists()
 
 
 def test_display_info_hides_internal_element_metadata():
@@ -250,6 +296,172 @@ def test_deepl_requires_auth_key(tmp_path, monkeypatch):
         assert "DEEPL_AUTH_KEY" in str(exc)
     else:
         raise AssertionError("DeepL client should require an API key")
+
+
+def _deepl_glossary(
+    name="KamiWiki JA-EN",
+    glossary_id="glossary-id",
+    entries=True,
+    creation_time="2026-01-01",
+):
+    dictionaries = (
+        [SimpleNamespace(source_lang="JA", target_lang="EN")]
+        if entries
+        else []
+    )
+    return SimpleNamespace(
+        name=name,
+        glossary_id=glossary_id,
+        dictionaries=dictionaries,
+        creation_time=creation_time,
+    )
+
+
+def test_deepl_reuses_unchanged_managed_glossary(tmp_path, monkeypatch):
+    glossary = _deepl_glossary()
+
+    class Client:
+        def list_multilingual_glossaries(self):
+            return [glossary]
+
+        def get_multilingual_glossary_entries(self, selected, source, target):
+            assert selected is glossary
+            assert (source, target) == ("JA", "EN")
+            return SimpleNamespace(
+                dictionaries=[
+                    SimpleNamespace(
+                        source_lang="JA",
+                        target_lang="EN",
+                        entries="\n".join(
+                            f"{key}\t{value}"
+                            for key, value in translator.glossary.items()
+                        ),
+                    )
+                ]
+            )
+
+        def replace_multilingual_glossary_dictionary(self, *_args):
+            raise AssertionError("Unchanged glossary must not be replaced")
+
+    monkeypatch.delenv("DEEPL_GLOSSARY_ID", raising=False)
+    translator = DeepLJapaneseEnglishTranslator(tmp_path)
+    translator._client = Client()
+
+    assert translator._ensure_glossary() is glossary
+
+
+def test_deepl_migrates_legacy_name_and_replaces_changed_entries(
+    tmp_path,
+    monkeypatch,
+):
+    legacy = _deepl_glossary(name="KamiWiki JA-EN old-hash")
+    renamed = _deepl_glossary()
+    calls = []
+
+    class Client:
+        def list_multilingual_glossaries(self):
+            return [legacy]
+
+        def update_multilingual_glossary_name(self, selected, name):
+            calls.append(("rename", selected, name))
+            return renamed
+
+        def get_multilingual_glossary_entries(self, *_args):
+            return SimpleNamespace(
+                dictionaries=[
+                    SimpleNamespace(
+                        source_lang="JA",
+                        target_lang="EN",
+                        entries={"old": "term"},
+                    )
+                ]
+            )
+
+        def replace_multilingual_glossary_dictionary(
+            self,
+            selected,
+            dictionary,
+        ):
+            calls.append(("replace", selected, dictionary.entries))
+
+    monkeypatch.delenv("DEEPL_GLOSSARY_ID", raising=False)
+    translator = DeepLJapaneseEnglishTranslator(tmp_path)
+    translator._client = Client()
+
+    assert translator._ensure_glossary() is renamed
+    assert calls == [
+        ("rename", legacy, "KamiWiki JA-EN"),
+        ("replace", renamed, translator.glossary),
+    ]
+
+
+def test_deepl_creates_stable_managed_glossary(tmp_path, monkeypatch):
+    created = _deepl_glossary()
+    calls = []
+
+    class Client:
+        def list_multilingual_glossaries(self):
+            return []
+
+        def create_multilingual_glossary(self, name, dictionaries):
+            calls.append((name, dictionaries[0].entries))
+            return created
+
+        def get_multilingual_glossary_entries(self, *_args):
+            return SimpleNamespace(
+                dictionaries=[
+                    SimpleNamespace(
+                        source_lang="JA",
+                        target_lang="EN",
+                        entries=translator.glossary,
+                    )
+                ]
+            )
+
+    monkeypatch.delenv("DEEPL_GLOSSARY_ID", raising=False)
+    translator = DeepLJapaneseEnglishTranslator(tmp_path)
+    translator._client = Client()
+
+    assert translator._ensure_glossary() is created
+    assert calls == [("KamiWiki JA-EN", translator.glossary)]
+
+
+def test_deepl_syncs_configured_glossary_id(tmp_path, monkeypatch):
+    configured = _deepl_glossary(name="Shared glossary")
+    calls = []
+
+    class Client:
+        def get_multilingual_glossary(self, glossary_id):
+            calls.append(("get", glossary_id))
+            return configured
+
+        def get_multilingual_glossary_entries(self, *_args):
+            return SimpleNamespace(
+                dictionaries=[
+                    SimpleNamespace(
+                        source_lang="JA",
+                        target_lang="EN",
+                        entries={"old": "term"},
+                    )
+                ]
+            )
+
+        def replace_multilingual_glossary_dictionary(
+            self,
+            selected,
+            dictionary,
+        ):
+            calls.append(("replace", selected, dictionary.entries))
+
+    monkeypatch.setenv("DEEPL_GLOSSARY_ID", "configured-id")
+    translator = DeepLJapaneseEnglishTranslator(tmp_path)
+    translator._client = Client()
+
+    assert translator._ensure_glossary() is configured
+    assert calls == [
+        ("get", "configured-id"),
+        ("replace", configured, translator.glossary),
+    ]
 
 
 def test_deepl_translates_batch_and_caches_results(tmp_path):
