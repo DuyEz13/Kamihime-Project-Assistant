@@ -1,8 +1,6 @@
 # KamiWiki
 
-A simplified wiki website about Kamihime Project that integrates a chatbot to
-assist with character information. The data pipeline supports the three SSR
-object catalogs: Kamihime, Eidolons, and Weapons.
+A simplified wiki website about Kamihime Project that integrates a chatbot to assist with character information. The data pipeline supports the three SSR object catalogs: Kamihime, Eidolons and Weapons.
 
 ## Setup with uv
 
@@ -41,11 +39,7 @@ GPU on Linux.
 ### DeepL API alternative
 
 DeepL API Free currently includes up to 1,000,000 translated source characters
-per account. To test DeepL without removing the Qwen pipeline:
-
-```powershell
-uv sync
-```
+per account.
 
 Set the provider and API key in `.env`:
 
@@ -56,12 +50,6 @@ DEEPL_MODEL_TYPE=prefer_quality_optimized
 DEEPL_TRANSLATION_BATCH_SIZE=50
 DEEPL_REQUIRE_GLOSSARY=1
 DEEPL_GLOSSARY_NAME=KamiWiki JA-EN
-```
-
-Test a few values before running a full update:
-
-```powershell
-uv run python scripts/test_translation.py --provider deepl --element fire --count 5
 ```
 
 ### Google Translate API alternative
@@ -75,12 +63,6 @@ GOOGLE_TRANSLATE_API_KEY=your_google_translate_api_key
 GOOGLE_TRANSLATE_BATCH_SIZE=50
 ```
 
-Test a few values before running a full update:
-
-```powershell
-uv run python scripts/test_translation.py --provider google --element fire --count 5
-```
-
 Add or correct game terminology in `kami/translation_glossary.json`. Before
 translation, KamiWiki creates or reuses the stable glossary named by
 `DEEPL_GLOSSARY_NAME` and synchronizes its complete JA-EN dictionary with this
@@ -90,23 +72,7 @@ glossary instead, set `DEEPL_GLOSSARY_ID`; its JA-EN dictionary will be
 synchronized too. Set `DEEPL_REQUIRE_GLOSSARY=0` only when testing without
 terminology enforcement.
 
-Test a small translation sample without rebuilding or overwriting the English
-element files:
-
-```powershell
-# Translate five random values from the Fire raw data
-uv run python scripts/test_translation.py --element fire --count 5
-
-# Translate specific values
-uv run python scripts/test_translation.py `
-  --text "敵全体に火属性ダメージ" `
-  --text "味方全体のバーストゲージUP"
-```
-
-Full database crawling is intentionally conservative because the source wiki
-can return HTTP 429 when requests arrive too quickly. The default setup uses
-one detail worker, a global request interval, randomized per-character delay,
-and exponential backoff with jitter:
+Full database crawling is intentionally conservative because the source wiki can return HTTP 429 when requests arrive too quickly. The default setup uses one detail worker, a global request interval, randomized per-character delay and exponential backoff with jitter:
 
 ```dotenv
 KAMI_CRAWL_WORKERS=1
@@ -121,8 +87,7 @@ KAMI_HTTP_429_COOLDOWN=45
 ```
 
 If the wiki still returns 429, increase `KAMI_REQUEST_INTERVAL` and
-`KAMI_HTTP_429_COOLDOWN` before increasing workers. `Retry-After` headers are
-honored when the site provides them.
+`KAMI_HTTP_429_COOLDOWN` before increasing workers. `Retry-After` headers are honored when the site provides them.
 
 ## Run
 
@@ -132,7 +97,7 @@ uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 Open `http://127.0.0.1:8000/`.
 
-## Agentic RAG chatbot
+## Asisstant Chatbot
 
 Configure at least one chat provider in `.env`:
 
