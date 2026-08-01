@@ -1,0 +1,121 @@
+{
+  "series": [
+    {
+      "object_type": "weapon",
+      "series_key": "weapon:apocalypse",
+      "series_name": "Apocalypse",
+      "source_prefixes": ["\u9ed9\u793a\u70d9"],
+      "aliases": ["Apocalypse", "Apocalyptic", "\u9ed9\u793a\u70d9"],
+      "expected_elements": ["fire", "water", "wind", "thunder", "light", "dark"]
+    },
+    {
+      "object_type": "weapon",
+      "series_key": "weapon:six-desires-heaven",
+      "series_name": "Six Desires Heaven",
+      "source_prefixes": ["\u516d\u6b32\u5929"],
+      "aliases": ["Six Desires Heaven", "Rokuyokuten", "\u516d\u6b32\u5929"],
+      "expected_elements": ["fire", "water", "wind", "thunder", "light", "dark"]
+    },
+    {
+      "object_type": "weapon",
+      "series_key": "weapon:divine-bond",
+      "series_name": "Divine Bond",
+      "source_prefixes": ["\u795e\u7d50\u30fb"],
+      "aliases": ["Divine Bond", "Shinketsu", "\u795e\u7d50\u30fb"],
+      "expected_elements": ["fire", "water", "wind", "thunder", "light", "dark"],
+      "lifecycle": "releasing"
+    },
+    {
+      "object_type": "eidolon",
+      "series_key": "eidolon:catastrophe",
+      "series_name": "Catastrophe",
+      "source_suffixes": ["\u5929\u7344\u30ab\u30bf\u30b9\u30c8\u30ed\u30d5\u30a3\u30a2"],
+      "aliases": ["Catastrophe", "Catastrophia", "\u30ab\u30bf\u30b9\u30c8\u30ed\u30d5\u30a3\u30a2"],
+      "expected_elements": ["fire", "water", "wind", "thunder", "light", "dark"]
+    },
+    {
+      "object_type": "eidolon",
+      "series_key": "eidolon:pb-gen-1",
+      "series_name": "PB Gen 1",
+      "source_regexes": ["^PB0[1-6]"],
+      "aliases": ["PB Gen 1", "PB1", "PB base", "Mali Gen 1"],
+      "expected_elements": ["fire", "water", "wind", "thunder", "light", "dark"]
+    },
+    {
+      "object_type": "eidolon",
+      "series_key": "eidolon:pb-gen-2",
+      "series_name": "PB Gen 2",
+      "effect_regexes": ["^\u5e7b.+\u9a0e\u306e"],
+      "acquisition_names": ["\u5e7b\u7363\u796d"],
+      "aliases": ["PB Gen 2", "PB2", "PB evolved", "Mali Gen 2"],
+      "expected_elements": ["fire", "water", "wind", "thunder", "light", "dark"]
+    },
+    {
+      "object_type": "eidolon",
+      "series_key": "eidolon:oni-gen-1",
+      "series_name": "Oni Gen 1",
+      "effect_prefixes": ["\u9b3c\u54ed\u557e\u3005\u30fb"],
+      "aliases": ["Oni Gen 1", "Oni", "Oni base"],
+      "expected_elements": ["fire", "water", "wind", "thunder", "light", "dark"]
+    },
+    {
+      "object_type": "eidolon",
+      "series_key": "eidolon:oni-gen-2",
+      "series_name": "Oni Gen 2",
+      "source_contains": ["\u9b3c\u88c5\u30fb"],
+      "aliases": ["Oni Gen 2", "Demon Armor", "Oni Armor", "Oni Outfit"],
+      "expected_elements": ["fire", "water", "wind", "thunder", "light", "dark"]
+    },
+    {
+      "object_type": "eidolon",
+      "series_key": "eidolon:machine-beast",
+      "series_name": "Machine Beast",
+      "source_regexes": ["^MB0[1-6]"],
+      "aliases": ["Machine Beast", "Machine Beasts", "MB"],
+      "expected_elements": ["fire", "water", "wind", "thunder", "light", "dark"]
+    },
+    {
+      "object_type": "eidolon",
+      "series_key": "eidolon:guardian",
+      "series_name": "Guardian",
+      "source_names": ["\u30d5\u30a1\u30ec\u30b0", "\u30aa\u30d5\u30a3\u30a8\u30eb", "\u30d9\u30c8\u30fc\u30eb", "\u30d5\u30eb", "\u30cf\u30ae\u30c8", "\u30a2\u30e9\u30c8\u30ed\u30f3", "\u30aa\u30af"],
+      "aliases": ["Guardian", "Guard", "Guardian base"],
+      "expected_elements": ["fire", "water", "wind", "thunder", "light", "dark", "phantom"]
+    },
+    {
+      "object_type": "eidolon",
+      "series_key": "eidolon:limited-guardian",
+      "series_name": "Limited Guardian",
+      "source_regexes": ["^\uff3b[^\uff3d]+\u306e\u5b88\u8b77\u8005\uff3d"],
+      "acquisition_names": ["\u5e7b\u7363\u796d"],
+      "aliases": ["Limited Guardian", "Limited Guard", "Lim Guard", "Upgraded Guardian"],
+      "expected_elements": ["fire", "water", "wind", "thunder", "light", "dark"]
+    },
+    {
+      "object_type": "eidolon",
+      "series_key": "eidolon:kaiser-dragoon",
+      "series_name": "Kaiser Dragoon",
+      "source_suffixes": ["\u30c9\u30e9\u30b0\u30fc\u30f3"],
+      "aliases": ["Kaiser Dragoon", "Kaiser Dragoons"],
+      "expected_elements": ["fire", "water", "wind", "thunder", "light", "dark"]
+    },
+    {
+      "object_type": "eidolon",
+      "series_key": "eidolon:lilim",
+      "series_name": "Lilim",
+      "source_prefixes": ["\u30ea\u30ea\u30e0\u30fb"],
+      "aliases": ["Lilim", "Lilims"],
+      "expected_elements": ["fire", "water", "wind", "thunder", "light", "dark", "phantom"]
+    },
+    {
+      "object_type": "eidolon",
+      "series_key": "eidolon:fairy-tale",
+      "series_name": "Fairy Tale",
+      "effect_prefixes": ["\u30dd\u30c6\u30b9\u30bf\u30b9\u30fb"],
+      "acquisition_names": ["\u5e7b\u7363\u796d"],
+      "aliases": ["Fairy Tale", "Fairy Tales"],
+      "expected_elements": ["fire", "water", "wind", "thunder", "light", "dark"],
+      "lifecycle": "releasing"
+    }
+  ]
+}

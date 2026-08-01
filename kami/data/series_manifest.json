@@ -1,0 +1,223 @@
+{
+  "eidolon": [
+    {
+      "series_key": "eidolon:auto:c0521bea3b5d",
+      "object_type": "eidolon",
+      "signature": "封鎖結界・",
+      "confidence": "high",
+      "elements": [
+        "fire",
+        "thunder",
+        "water",
+        "wind"
+      ],
+      "members": [
+        "https://wikiwiki.jp/kamiprodb/%E6%9C%B1%E9%9B%80",
+        "https://wikiwiki.jp/kamiprodb/%E7%8E%84%E6%AD%A6",
+        "https://wikiwiki.jp/kamiprodb/%E7%99%BD%E8%99%8E",
+        "https://wikiwiki.jp/kamiprodb/%E9%9D%92%E9%BE%8D"
+      ],
+      "member_details": [
+        {
+          "source_url": "https://wikiwiki.jp/kamiprodb/%E6%9C%B1%E9%9B%80",
+          "original_name": "朱雀",
+          "element": "fire"
+        },
+        {
+          "source_url": "https://wikiwiki.jp/kamiprodb/%E7%99%BD%E8%99%8E",
+          "original_name": "白虎",
+          "element": "thunder"
+        },
+        {
+          "source_url": "https://wikiwiki.jp/kamiprodb/%E9%9D%92%E9%BE%8D",
+          "original_name": "青龍",
+          "element": "water"
+        },
+        {
+          "source_url": "https://wikiwiki.jp/kamiprodb/%E7%8E%84%E6%AD%A6",
+          "original_name": "玄武",
+          "element": "wind"
+        }
+      ]
+    },
+    {
+      "series_key": "eidolon:auto:2288f5d9cb71",
+      "object_type": "eidolon",
+      "signature": "カズィクル・",
+      "confidence": "medium",
+      "elements": [
+        "phantom",
+        "thunder",
+        "wind"
+      ],
+      "members": [
+        "https://wikiwiki.jp/kamiprodb/%E8%A1%80%E9%AC%BC%E7%8E%8B%E3%83%B4%E3%83%A9%E3%83%89%E3%83%BB%E3%83%84%E3%82%A7%E3%83%9A%E3%82%B7%E3%83%A5",
+        "https://wikiwiki.jp/kamiprodb/%EF%BC%BB%E5%B5%90%E5%B8%9D%EF%BC%BD%E3%83%B4%E3%83%A9%E3%83%89%E3%83%BB%E3%83%84%E3%82%A7%E3%83%9A%E3%82%B7%E3%83%A5",
+        "https://wikiwiki.jp/kamiprodb/%EF%BC%BB%E9%9B%B7%E7%9A%87%EF%BC%BD%E3%83%B4%E3%83%A9%E3%83%89%E3%83%BB%E3%83%84%E3%82%A7%E3%83%9A%E3%82%B7%E3%83%A5"
+      ],
+      "member_details": [
+        {
+          "source_url": "https://wikiwiki.jp/kamiprodb/%E8%A1%80%E9%AC%BC%E7%8E%8B%E3%83%B4%E3%83%A9%E3%83%89%E3%83%BB%E3%83%84%E3%82%A7%E3%83%9A%E3%82%B7%E3%83%A5",
+          "original_name": "血鬼王ヴラド・ツェペシュ",
+          "element": "phantom"
+        },
+        {
+          "source_url": "https://wikiwiki.jp/kamiprodb/%EF%BC%BB%E9%9B%B7%E7%9A%87%EF%BC%BD%E3%83%B4%E3%83%A9%E3%83%89%E3%83%BB%E3%83%84%E3%82%A7%E3%83%9A%E3%82%B7%E3%83%A5",
+          "original_name": "［雷皇］ヴラド・ツェペシュ",
+          "element": "thunder"
+        },
+        {
+          "source_url": "https://wikiwiki.jp/kamiprodb/%EF%BC%BB%E5%B5%90%E5%B8%9D%EF%BC%BD%E3%83%B4%E3%83%A9%E3%83%89%E3%83%BB%E3%83%84%E3%82%A7%E3%83%9A%E3%82%B7%E3%83%A5",
+          "original_name": "［嵐帝］ヴラド・ツェペシュ",
+          "element": "wind"
+        }
+      ]
+    },
+    {
+      "series_key": "eidolon:auto:4c956a5b7c85",
+      "object_type": "eidolon",
+      "signature": "浄化結界・",
+      "confidence": "medium",
+      "elements": [
+        "dark",
+        "light"
+      ],
+      "members": [
+        "https://wikiwiki.jp/kamiprodb/%E5%8C%97%E6%96%97%E6%98%9F%E5%90%9B",
+        "https://wikiwiki.jp/kamiprodb/%E5%8D%97%E6%96%97%E6%98%9F%E5%90%9B"
+      ],
+      "member_details": [
+        {
+          "source_url": "https://wikiwiki.jp/kamiprodb/%E5%8C%97%E6%96%97%E6%98%9F%E5%90%9B",
+          "original_name": "北斗星君",
+          "element": "dark"
+        },
+        {
+          "source_url": "https://wikiwiki.jp/kamiprodb/%E5%8D%97%E6%96%97%E6%98%9F%E5%90%9B",
+          "original_name": "南斗星君",
+          "element": "light"
+        }
+      ]
+    },
+    {
+      "series_key": "eidolon:auto:fbe17d88f5d9",
+      "object_type": "eidolon",
+      "signature": "ジャック・",
+      "confidence": "medium",
+      "elements": [
+        "dark",
+        "water"
+      ],
+      "members": [
+        "https://wikiwiki.jp/kamiprodb/%E3%82%B8%E3%83%A3%E3%83%83%E3%82%AF%E3%83%BB%E3%82%AA%E3%83%BB%E3%83%95%E3%83%AD%E3%82%B9%E3%83%88",
+        "https://wikiwiki.jp/kamiprodb/%E3%82%B8%E3%83%A3%E3%83%83%E3%82%AF%E3%83%BB%E3%82%AA%E3%83%BC%E3%83%BB%E3%83%A9%E3%83%B3%E3%82%BF%E3%83%B3"
+      ],
+      "member_details": [
+        {
+          "source_url": "https://wikiwiki.jp/kamiprodb/%E3%82%B8%E3%83%A3%E3%83%83%E3%82%AF%E3%83%BB%E3%82%AA%E3%83%BC%E3%83%BB%E3%83%A9%E3%83%B3%E3%82%BF%E3%83%B3",
+          "original_name": "ジャック・オー・ランタン",
+          "element": "dark"
+        },
+        {
+          "source_url": "https://wikiwiki.jp/kamiprodb/%E3%82%B8%E3%83%A3%E3%83%83%E3%82%AF%E3%83%BB%E3%82%AA%E3%83%BB%E3%83%95%E3%83%AD%E3%82%B9%E3%83%88",
+          "original_name": "ジャック・オ・フロスト",
+          "element": "water"
+        }
+      ]
+    },
+    {
+      "series_key": "eidolon:auto:03fcf9e07dab",
+      "object_type": "eidolon",
+      "signature": "ヴラド・",
+      "confidence": "medium",
+      "elements": [
+        "thunder",
+        "wind"
+      ],
+      "members": [
+        "https://wikiwiki.jp/kamiprodb/%EF%BC%BB%E5%B5%90%E5%B8%9D%EF%BC%BD%E3%83%B4%E3%83%A9%E3%83%89%E3%83%BB%E3%83%84%E3%82%A7%E3%83%9A%E3%82%B7%E3%83%A5",
+        "https://wikiwiki.jp/kamiprodb/%EF%BC%BB%E9%9B%B7%E7%9A%87%EF%BC%BD%E3%83%B4%E3%83%A9%E3%83%89%E3%83%BB%E3%83%84%E3%82%A7%E3%83%9A%E3%82%B7%E3%83%A5"
+      ],
+      "member_details": [
+        {
+          "source_url": "https://wikiwiki.jp/kamiprodb/%EF%BC%BB%E9%9B%B7%E7%9A%87%EF%BC%BD%E3%83%B4%E3%83%A9%E3%83%89%E3%83%BB%E3%83%84%E3%82%A7%E3%83%9A%E3%82%B7%E3%83%A5",
+          "original_name": "［雷皇］ヴラド・ツェペシュ",
+          "element": "thunder"
+        },
+        {
+          "source_url": "https://wikiwiki.jp/kamiprodb/%EF%BC%BB%E5%B5%90%E5%B8%9D%EF%BC%BD%E3%83%B4%E3%83%A9%E3%83%89%E3%83%BB%E3%83%84%E3%82%A7%E3%83%9A%E3%82%B7%E3%83%A5",
+          "original_name": "［嵐帝］ヴラド・ツェペシュ",
+          "element": "wind"
+        }
+      ]
+    }
+  ],
+  "weapon": [
+    {
+      "series_key": "weapon:auto:2f932c88f975",
+      "object_type": "weapon",
+      "signature": "BG##",
+      "confidence": "medium",
+      "elements": [
+        "fire",
+        "thunder",
+        "wind"
+      ],
+      "members": [
+        "https://wikiwiki.jp/kamiprodb/BG03%E3%82%B2%E3%82%A4%E3%83%AB%E3%82%B0%E3%83%AA%E3%83%95",
+        "https://wikiwiki.jp/kamiprodb/BG04%E3%83%9C%E3%83%AB%E3%83%88%E3%83%99%E3%82%A2%E3%82%AF%E3%83%AD%E3%83%BC",
+        "https://wikiwiki.jp/kamiprodb/BG06%E3%82%A2%E3%83%93%E3%82%B9%E3%82%B7%E3%83%A7%E3%83%83%E3%83%88"
+      ],
+      "member_details": [
+        {
+          "source_url": "https://wikiwiki.jp/kamiprodb/BG06%E3%82%A2%E3%83%93%E3%82%B9%E3%82%B7%E3%83%A7%E3%83%83%E3%83%88",
+          "original_name": "BG06アビスショット",
+          "element": "fire"
+        },
+        {
+          "source_url": "https://wikiwiki.jp/kamiprodb/BG04%E3%83%9C%E3%83%AB%E3%83%88%E3%83%99%E3%82%A2%E3%82%AF%E3%83%AD%E3%83%BC",
+          "original_name": "BG04ボルトベアクロー",
+          "element": "thunder"
+        },
+        {
+          "source_url": "https://wikiwiki.jp/kamiprodb/BG03%E3%82%B2%E3%82%A4%E3%83%AB%E3%82%B0%E3%83%AA%E3%83%95",
+          "original_name": "BG03ゲイルグリフ",
+          "element": "wind"
+        }
+      ]
+    },
+    {
+      "series_key": "weapon:auto:65116869e900",
+      "object_type": "weapon",
+      "signature": "BV##",
+      "confidence": "medium",
+      "elements": [
+        "fire",
+        "water",
+        "wind"
+      ],
+      "members": [
+        "https://wikiwiki.jp/kamiprodb/BV01%E3%83%90%E3%83%BC%E3%83%B3%E3%83%86%E3%82%A4%E3%83%AB",
+        "https://wikiwiki.jp/kamiprodb/BV02%E3%82%AF%E3%83%AD%E3%82%B9%E3%83%95%E3%82%A3%E3%83%B3",
+        "https://wikiwiki.jp/kamiprodb/BV03%E3%82%B9%E3%82%A4%E3%83%95%E3%83%88%E3%82%BD%E3%83%BC%E3%83%89"
+      ],
+      "member_details": [
+        {
+          "source_url": "https://wikiwiki.jp/kamiprodb/BV01%E3%83%90%E3%83%BC%E3%83%B3%E3%83%86%E3%82%A4%E3%83%AB",
+          "original_name": "BV01バーンテイル",
+          "element": "fire"
+        },
+        {
+          "source_url": "https://wikiwiki.jp/kamiprodb/BV02%E3%82%AF%E3%83%AD%E3%82%B9%E3%83%95%E3%82%A3%E3%83%B3",
+          "original_name": "BV02クロスフィン",
+          "element": "water"
+        },
+        {
+          "source_url": "https://wikiwiki.jp/kamiprodb/BV03%E3%82%B9%E3%82%A4%E3%83%95%E3%83%88%E3%82%BD%E3%83%BC%E3%83%89",
+          "original_name": "BV03スイフトソード",
+          "element": "wind"
+        }
+      ]
+    }
+  ]
+}

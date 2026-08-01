@@ -123,7 +123,7 @@ function renderStatus(status) {
     translationDevice.textContent = status.device || "Detecting device...";
   }
   if (translationModel) translationModel.textContent = status.model || "";
-  const active = ["starting", "updating", "translating"].includes(status.state);
+  const active = ["starting", "updating", "translating", "indexing"].includes(status.state);
   actionButtons.forEach((button) => {
     button.disabled = active;
   });
@@ -132,7 +132,11 @@ function renderStatus(status) {
     const original = button.dataset.originalText || button.textContent;
     button.dataset.originalText = original;
     button.textContent = active && button.dataset.updateMode === status.mode
-      ? status.state === "translating" ? "Translating..." : "Updating..."
+      ? status.state === "translating"
+        ? "Translating..."
+        : status.state === "indexing"
+          ? "Indexing..."
+          : "Updating..."
       : original;
   });
   if (translateButton) {
@@ -222,7 +226,7 @@ translateForm?.addEventListener("submit", async (event) => {
   }
 });
 
-if (["starting", "updating", "translating"].includes(statusBox?.dataset.state)) {
+if (["starting", "updating", "translating", "indexing"].includes(statusBox?.dataset.state)) {
   pollStatus();
 }
 
@@ -270,6 +274,12 @@ document.querySelectorAll(".element-link").forEach((link) => {
 
 const CHAT_SESSION_KEY = "kamiwiki_chat_session_id";
 const CHAT_PROVIDER_KEY = "kamiwiki_chat_provider";
+const CHAT_CLIENT_KEY = "kamiwiki_chat_client_id";
+let chatClientId = window.localStorage.getItem(CHAT_CLIENT_KEY) || "";
+if (!chatClientId) {
+  chatClientId = window.crypto?.randomUUID?.() || `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  window.localStorage.setItem(CHAT_CLIENT_KEY, chatClientId);
+}
 const urlParams = new URLSearchParams(window.location.search);
 let chatSessionId = urlParams.get("chat") || window.localStorage.getItem(CHAT_SESSION_KEY) || "";
 if (urlParams.get("chat")) {
@@ -379,10 +389,19 @@ function appendChatMessage(role, text, options = {}) {
   if (options.sources?.length) {
     const sources = document.createElement("div");
     sources.className = "chat-sources";
-    sources.textContent = `Sources: ${options.sources
-      .slice(0, 5)
-      .map((source) => source.name)
-      .join(", ")}`;
+    sources.append(document.createTextNode("Sources: "));
+    options.sources.slice(0, 14).forEach((source, index) => {
+      if (index) sources.append(document.createTextNode(", "));
+      if (source.local_url) {
+        const link = document.createElement("a");
+        link.href = source.local_url;
+        link.textContent = source.name;
+        link.title = `${source.object_type || "object"} · ${source.element || ""} · ${source.section || ""}`;
+        sources.append(link);
+      } else {
+        sources.append(document.createTextNode(source.name));
+      }
+    });
     bubble.appendChild(sources);
   }
   row.appendChild(bubble);
@@ -567,6 +586,7 @@ chatForm?.addEventListener("submit", async (event) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         session_id: chatSessionId || null,
+        client_id: chatClientId,
         provider: chatModelProvider?.value || "gpt",
         message,
       }),

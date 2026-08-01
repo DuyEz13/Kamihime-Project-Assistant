@@ -16,7 +16,7 @@ Optional features:
 # Local Japanese-to-English translation
 uv sync --extra translation
 
-# FAISS/RAG indexing support
+# Local dense/sparse embeddings and reranking
 uv sync --extra rag
 
 # Install every optional feature
@@ -44,7 +44,7 @@ DeepL API Free currently includes up to 1,000,000 translated source characters
 per account. To test DeepL without removing the Qwen pipeline:
 
 ```powershell
-uv sync --extra deepl
+uv sync
 ```
 
 Set the provider and API key in `.env`:
@@ -132,38 +132,51 @@ uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 
 Open `http://127.0.0.1:8000/`.
 
-For a production-style local process:
+## Agentic RAG chatbot
+
+Configure at least one chat provider in `.env`:
+
+```dotenv
+KAMI_CHAT_PROVIDER=gpt
+
+OPENAI_API_KEY=your_openai_api_key
+OPENAI_CHAT_MODEL=gpt-4.1-mini
+
+GEMINI_API_KEY=your_gemini_api_key
+GEMINI_CHAT_MODEL=gemini-2.5-flash
+
+DEEPSEEK_API_KEY=your_deepseek_api_key
+DEEPSEEK_CHAT_MODEL=deepseek-chat
+```
+
+Install the RAG dependencies and build the local index:
 
 ```powershell
-uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
+uv sync --extra rag
+uv run python scripts/build_rag_index.py
 ```
 
-The sidebar groups data into Kamihime, Eidolons, and Weapons. Each catalog
-expands into its supported elements and opens routes such as
-`/catalog/eidolon/phantom` or `/catalog/weapon/fire`. Catalog pages provide
-two update modes:
+Main RAG options:
 
-- **Update latest records** checks every configured element list for the
-  selected object type, reuses existing detail records, crawls detail pages
-  only for newly discovered entries, and translates new or changed text.
-- **Update Database** crawls every object detail page again so edits to
-  existing skills, stats, effects, and flavor text are captured, then rebuilds
-  the translated element files.
-
-Each element file is replaced atomically only after that element crawl
-succeeds, so an empty or failed crawl does not overwrite its previous data.
-Raw and translated data use an object/element layout:
-
-```text
-kami/data/<object_type>/<element>/raw.jsonl
-kami/data/<object_type>/<element>/translated/<provider>.jsonl
+```dotenv
+KAMI_RAG_DEVICE=auto
+KAMI_RAG_EMBED_MODEL=intfloat/multilingual-e5-base
+KAMI_RAG_SPARSE_MODEL=Qdrant/bm25
+KAMI_RAG_RERANK_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
+KAMI_RAG_OBJECT_CANDIDATES_KAMIHIME=7
+KAMI_RAG_OBJECT_CANDIDATES_EIDOLON=7
+KAMI_RAG_OBJECT_CANDIDATES_WEAPON=24
+KAMI_RAG_RETRIEVAL_K=20
+KAMI_RAG_SERIES_CONTEXT_CHARS=48000
+KAMI_RAG_RERANK=1
+KAMI_RAG_INDEX_BATCH_SIZE=64
 ```
 
-`object_type` is `kamihime`, `eidolon`, or `weapon`. Kamihime has six
-elements; Eidolons and Weapons also have `phantom`. The web application
-prefers the provider selected by `KAMI_RENDER_TRANSLATION_PROVIDER` or
-`KAMI_TRANSLATION_PROVIDER`, then falls back to other providers and finally
-to raw Japanese data until translation is available.
+To build with an existing CUDA-enabled Python environment:
+
+```powershell
+python scripts/build_rag_index.py --device cuda
+```
 
 ## Project Structure
 
@@ -190,9 +203,12 @@ KamiWiki/
 |   |   |   `-- <element>/...
 |   |   |-- weapon/                   # Six elements plus Phantom
 |   |   |   `-- <element>/...
-|   |   |-- chat_sessions.json      # Per-conversation chatbot memory
+|   |   |-- chat_memory.sqlite3     # Durable conversation and agent state
+|   |   |-- chat_sessions.json      # Migrated compatibility mirror
+|   |   |-- rag_index/              # Local Qdrant hybrid index
 |   |   `-- .translation_cache.json # Shared translation-memory cache
-|   |-- chatbot.py              # RAG retrieval, chat memory and calls
+|   |-- chatbot.py              # Backward-compatible chatbot/API facade
+|   |-- agent/                  # LangGraph, providers, memory and hybrid RAG
 |   |-- crawler.py              # Crawls all three object catalogs and details
 |   |-- pipeline.py             # Runs latest/full updates in the background
 |   |-- data_store.py           # Loads and normalizes catalog view models
@@ -200,12 +216,13 @@ KamiWiki/
 |   |-- paths.py                # Shared data directory and element file paths
 |   |-- translator.py           # Qwen, DeepL, Google translation pipelines
 |   |-- translation_glossary.json # Canonical English game terminology
-|   |-- build_index.py          # Optional FAISS/RAG index builder
+|   |-- build_index.py          # Compatibility hybrid-index entry point
 |   |-- kamihime_raw.jsonl      # Legacy combined raw-data fallback
 |   |-- all_kami_data.jsonl     # Legacy JSONL data fallback
 |   `-- all_kami_data.json      # Legacy JSON data snapshot
 |-- img/                        # Element icons used by the sidebar
 |-- scripts/
+|   |-- build_rag_index.py      # Build the unified Qdrant hybrid index
 |   |-- crawl_data.py           # Crawl raw data by object type and element
 |   `-- test_translation.py     # Test a few translations without rebuilding data
 |-- test.ipynb                  # Experimental crawler and data inspection notebook

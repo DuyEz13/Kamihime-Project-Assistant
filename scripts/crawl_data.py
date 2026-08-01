@@ -19,6 +19,7 @@ from kami.crawler import (  # noqa: E402
     update_object_element_latest,
 )
 from kami.paths import DATA_DIR, OBJECT_ELEMENTS, OBJECT_TYPES  # noqa: E402
+from kami.series import reconcile_series_data, series_source_urls  # noqa: E402
 
 
 def _progress(status: dict) -> None:
@@ -78,6 +79,7 @@ def main() -> int:
     if args.source_url and not args.element:
         parser.error("--source-url requires --element")
 
+    source_urls_before = series_source_urls(DATA_DIR, args.object_type)
     if args.element:
         if args.mode == "database":
             result = {
@@ -112,7 +114,33 @@ def main() -> int:
             _progress,
         )
 
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    changed_source_urls = [
+        source_url
+        for value in result.values()
+        if isinstance(value, dict)
+        for source_url in value.get("new_source_urls", [])
+    ]
+    if args.mode == "database":
+        changed_source_urls = list(
+            series_source_urls(DATA_DIR, args.object_type) - source_urls_before
+        )
+    series_result = reconcile_series_data(
+        DATA_DIR,
+        args.object_type,
+        changed_source_urls=changed_source_urls,
+        allow_auto_attach=(
+            args.mode in {"latest", "database"}
+            and args.object_type in {"weapon", "eidolon"}
+        ),
+    )
+
+    print(
+        json.dumps(
+            {"crawl": result, "series": series_result},
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
     return 0
 
 

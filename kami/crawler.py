@@ -19,6 +19,7 @@ from .paths import (
     normalize_object_type,
     object_raw_path,
 )
+from .series import enrich_info_series
 
 
 SOURCE_URLS = {
@@ -423,11 +424,13 @@ class KamihimeCrawler:
         updated = copy.deepcopy(record)
         info = updated.setdefault("info", {})
         info["name"] = character["name"]
+        info["original_name"] = character["name"]
         info["source_url"] = character["link"]
         info["list_image"] = character["list_image"]
         info["release_date"] = character["release_date"]
         info["acquisition_method"] = character["acquisition_method"]
         info["object_type"] = object_type
+        enrich_info_series(info, object_type, character["name"], updated)
         return updated
 
     def apply_list_metadata(
@@ -1005,7 +1008,7 @@ def update_object_element_latest(
     data_dir: Path,
     source_url: str | None = None,
     progress_callback: ProgressCallback | None = None,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     selected = normalize_object_type(object_type)
     element = element.strip().lower()
     destination = object_data_path(data_dir, selected, element)
@@ -1031,6 +1034,7 @@ def update_object_element_latest(
         records: list[dict] = []
         new_entries = 0
         crawled_details = 0
+        new_source_urls: list[str] = []
         new_detail_cache: dict[str, dict] = {}
         new_detail_links = {
             entry["link"]
@@ -1063,6 +1067,7 @@ def update_object_element_latest(
                 base_record = existing_by_url.get(entry["link"])
                 if base_record is None:
                     new_entries += 1
+                    new_source_urls.append(entry["link"])
                     if entry["link"] not in new_detail_cache:
                         new_detail_cache[entry["link"]] = crawler.crawl_character(entry)
                         crawled_details += 1
@@ -1089,6 +1094,7 @@ def update_object_element_latest(
         "new_entries": new_entries,
         "crawled_details": crawled_details,
         "removed_entries": max(0, len(existing_records) - len(records)),
+        "new_source_urls": new_source_urls,
     }
 
 

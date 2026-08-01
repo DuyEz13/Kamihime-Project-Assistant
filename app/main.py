@@ -85,6 +85,7 @@ templates.env.globals["asset_version"] = ASSET_VERSION
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     session_id: str | None = None
+    client_id: str | None = Field(default=None, max_length=128)
     provider: str = "gpt"
 
 
@@ -212,6 +213,7 @@ def chat(request: ChatRequest):
             message=request.message,
             session_id=request.session_id,
             provider=request.provider,
+            client_id=request.client_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

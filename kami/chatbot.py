@@ -15,7 +15,17 @@ from typing import Any
 import httpx
 
 from .data_store import load_characters
+from .data_store import load_catalog_items
 from .paths import DATA_DIR
+from .agent import memory as agent_memory
+from .agent.graph import run_agent
+from .agent.language import detect_response_language
+from .agent.providers import (
+    answer_with_model,
+    available_models,
+    model_info,
+    normalize_provider,
+)
 
 
 CHAT_MEMORY_PATH = DATA_DIR / "chat_sessions.json"
@@ -69,10 +79,6 @@ FOLLOWUP_KEYWORDS = {
     "these",
     "those",
 }
-PROVIDER_LABELS = {
-    "gpt": "GPT",
-    "gemini": "Gemini",
-}
 TRANSIENT_HTTP_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
 _MEMORY_LOCK = threading.Lock()
 
@@ -91,6 +97,9 @@ class RagSource:
     element: str
     slug: str
     score: float
+    object_type: str = "kamihime"
+    section: str = ""
+    local_url: str = ""
 
 
 def _now_iso() -> str:
@@ -373,32 +382,19 @@ def is_domain_question(message: str, sources: list[tuple[dict[str, Any], float]]
 
 
 def available_chat_models() -> list[ChatModel]:
-    gpt_model = os.getenv("OPENAI_CHAT_MODEL", "gpt-4.1-mini")
-    gemini_model = os.getenv("GEMINI_CHAT_MODEL", "gemini-2.5-flash")
     return [
         ChatModel(
-            provider="gpt",
-            label=PROVIDER_LABELS["gpt"],
-            model=gpt_model,
-            configured=bool(os.getenv("OPENAI_API_KEY")),
-        ),
-        ChatModel(
-            provider="gemini",
-            label=PROVIDER_LABELS["gemini"],
-            model=gemini_model,
-            configured=bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")),
-        ),
+            provider=item.provider,
+            label=item.label,
+            model=item.model,
+            configured=item.configured,
+        )
+        for item in available_models()
     ]
 
 
 def _normalize_provider(provider: str | None) -> str:
-    value = (provider or os.getenv("KAMI_CHAT_PROVIDER") or "gpt").strip().lower()
-    if value in {"openai", "chatgpt"}:
-        value = "gpt"
-    if value not in PROVIDER_LABELS:
-        valid = ", ".join(PROVIDER_LABELS)
-        raise ValueError(f"Unknown chat provider '{provider}'. Valid providers: {valid}")
-    return value
+    return normalize_provider(provider)
 
 
 def _system_prompt() -> str:
@@ -415,12 +411,7 @@ def _system_prompt() -> str:
 
 
 def _session_messages(session_id: str) -> list[dict[str, Any]]:
-    memory = _read_memory()
-    session = memory.get("sessions", {}).get(session_id)
-    if not isinstance(session, dict):
-        return []
-    messages = session.get("messages")
-    return messages if isinstance(messages, list) else []
+    return agent_memory.get_messages(CHAT_MEMORY_PATH, session_id)
 
 
 def _session_title(session: dict[str, Any], fallback: str = "New chat") -> str:
@@ -439,56 +430,15 @@ def _session_title(session: dict[str, Any], fallback: str = "New chat") -> str:
 
 
 def list_sessions() -> list[dict[str, Any]]:
-    with _MEMORY_LOCK:
-        memory = _read_memory()
-    sessions = memory.get("sessions", {})
-    if not isinstance(sessions, dict):
-        return []
-
-    result = []
-    for session_id, session in sessions.items():
-        if not isinstance(session, dict):
-            continue
-        messages = session.get("messages")
-        message_count = len(messages) if isinstance(messages, list) else 0
-        result.append(
-            {
-                "session_id": str(session_id),
-                "title": _session_title(session),
-                "created_at": session.get("created_at") or "",
-                "updated_at": session.get("updated_at")
-                or session.get("created_at")
-                or "",
-                "message_count": message_count,
-            }
-        )
-
-    result.sort(key=lambda item: item["updated_at"], reverse=True)
-    return result
+    return agent_memory.list_sessions(CHAT_MEMORY_PATH)
 
 
 def get_session(session_id: str) -> dict[str, Any]:
-    with _MEMORY_LOCK:
-        memory = _read_memory()
-    session = memory.get("sessions", {}).get(session_id, {})
-    if not isinstance(session, dict):
-        session = {}
-    return {
-        "session_id": session_id,
-        "title": _session_title(session),
-        "messages": session.get("messages") if isinstance(session.get("messages"), list) else [],
-    }
+    return agent_memory.get_session(CHAT_MEMORY_PATH, session_id)
 
 
 def delete_session(session_id: str) -> bool:
-    with _MEMORY_LOCK:
-        memory = _read_memory()
-        sessions = memory.get("sessions")
-        if not isinstance(sessions, dict) or session_id not in sessions:
-            return False
-        del sessions[session_id]
-        _save_memory(memory)
-    return True
+    return agent_memory.delete_session(CHAT_MEMORY_PATH, session_id)
 
 
 def _append_session_messages(
@@ -531,7 +481,11 @@ def _append_session_messages(
 
 def _memory_for_prompt(session_id: str) -> list[dict[str, str]]:
     limit = max(2, int(os.getenv("KAMI_CHAT_CONTEXT_MESSAGES", "16")))
-    messages = _session_messages(session_id)[-limit:]
+    messages = agent_memory.get_messages(
+        CHAT_MEMORY_PATH,
+        session_id,
+        limit,
+    )
     cleaned: list[dict[str, str]] = []
     for message in messages:
         if not isinstance(message, dict):
@@ -624,11 +578,13 @@ def _gemini_answer(
 
 
 def _call_model(provider: str, model: str, session_id: str, message: str, context: str) -> str:
-    if provider == "gpt":
-        return _openai_answer(model, session_id, message, context)
-    if provider == "gemini":
-        return _gemini_answer(model, session_id, message, context)
-    raise ValueError(f"Unsupported chat provider: {provider}")
+    return answer_with_model(
+        provider,
+        model,
+        _memory_for_prompt(session_id),
+        message,
+        context,
+    )
 
 
 def _provider_error_message(exc: Exception) -> str:
@@ -661,78 +617,115 @@ def answer_chat(
     message: str,
     session_id: str | None = None,
     provider: str | None = None,
+    client_id: str | None = None,
 ) -> dict[str, Any]:
     clean_message = message.strip()
     if not clean_message:
         raise ValueError("Message cannot be empty")
 
     selected_provider = _normalize_provider(provider)
-    model_map = {model.provider: model for model in available_chat_models()}
-    selected_model = model_map[selected_provider].model
+    selected_model = model_info(selected_provider).model
     current_session_id = session_id or uuid.uuid4().hex
-    sources = retrieve_characters(clean_message)
-    message_tokens = _tokenize(clean_message)
-    if (message_tokens & FOLLOWUP_KEYWORDS) and _session_messages(current_session_id):
-        previous_sources = _previous_source_characters(current_session_id)
-        memory_text = "\n".join(
-            item["content"] for item in _memory_for_prompt(current_session_id)
-        )
-        memory_sources = retrieve_characters(f"{clean_message}\n{memory_text}")
-        sources = _merge_ranked_sources(
-            previous_sources,
-            [*sources, *memory_sources],
-            _rag_top_k(),
-        )
-    source_payload = [
-        RagSource(
-            name=str(character.get("name") or ""),
-            element=str(character.get("element") or ""),
-            slug=str(character.get("slug") or ""),
-            score=score,
-        )
-        for character, score in sources
-    ]
+    history = _memory_for_prompt(current_session_id)
+    memory_state = agent_memory.get_state(CHAT_MEMORY_PATH, current_session_id)
+    current_client_id = client_id or "local-user"
+    memory_state["long_term"] = agent_memory.get_client_state(
+        CHAT_MEMORY_PATH,
+        current_client_id,
+    )
 
-    if not is_domain_question(clean_message, sources):
-        answer = (
-            "I can only answer questions about Kamihime Project characters in "
-            "the local database."
+    def catalog_loader(object_type: str) -> list[dict[str, Any]]:
+        if object_type == "kamihime":
+            return load_characters()
+        return load_catalog_items(object_type)
+
+    try:
+        result = run_agent(
+            session_id=current_session_id,
+            client_id=current_client_id,
+            provider=selected_provider,
+            model=selected_model,
+            message=clean_message,
+            history=history,
+            memory_state=memory_state,
+            answer_callback=_call_model,
+            loader=catalog_loader,
         )
-    else:
-        context = _build_context(sources)
-        try:
-            answer = _call_model(
-                selected_provider,
-                selected_model,
-                current_session_id,
+    except Exception as exc:
+        if isinstance(exc, (httpx.HTTPStatusError, httpx.RequestError)):
+            detail = _provider_error_message(exc)
+        else:
+            detail = str(exc).strip() or type(exc).__name__
+        raise RuntimeError(detail) from exc
+
+    answer = str(result.get("answer") or "")
+    source_payload = list(result.get("sources") or [])
+    updated_state = dict(memory_state)
+    language = detect_response_language(
+        clean_message,
+        str((memory_state.get("long_term") or {}).get("language") or "en"),
+    )
+    full_history = _session_messages(current_session_id)
+    context_limit = max(2, int(os.getenv("KAMI_CHAT_CONTEXT_MESSAGES", "16")))
+    summary = str(memory_state.get("summary") or "")
+    if len(full_history) >= context_limit:
+        older = full_history[:-8]
+        excerpt = "\n".join(
+            f"{item.get('role')}: {item.get('content')}"
+            for item in older
+        )
+        summary = (summary + "\n" + excerpt).strip()[-6000:]
+    updated_state.update(
+        {
+            "focus_entities": [
+                {
+                    "name": source.get("name"),
+                    "object_type": source.get("object_type"),
+                    "slug": source.get("slug"),
+                    "element": source.get("element"),
+                    "series_key": source.get("series_key"),
+                    "series_name": source.get("series_name"),
+                }
+                for source in source_payload
+            ],
+            "last_intent": getattr(result.get("plan"), "intent", "lookup"),
+            "last_standalone_question": getattr(
+                result.get("plan"),
+                "standalone_question",
                 clean_message,
-                context,
-            )
-        except (httpx.HTTPStatusError, httpx.RequestError) as exc:
-            raise RuntimeError(_provider_error_message(exc)) from exc
-
-    _append_session_messages(
+            ),
+            "summary": summary,
+            "long_term": {
+                "language": language,
+                "last_provider": selected_provider,
+            },
+        }
+    )
+    user_message = {
+        "role": "user",
+        "content": clean_message,
+        "created_at": _now_iso(),
+    }
+    assistant_message = {
+        "role": "assistant",
+        "content": answer,
+        "created_at": _now_iso(),
+        "provider": selected_provider,
+        "model": selected_model,
+        "sources": source_payload,
+    }
+    agent_memory.append_exchange(
+        CHAT_MEMORY_PATH,
         current_session_id,
-        [
-            {
-                "role": "user",
-                "content": clean_message,
-                "created_at": _now_iso(),
-            },
-            {
-                "role": "assistant",
-                "content": answer,
-                "created_at": _now_iso(),
-                "provider": selected_provider,
-                "model": selected_model,
-                "sources": [source.__dict__ for source in source_payload],
-            },
-        ],
+        current_client_id,
+        user_message,
+        assistant_message,
+        updated_state,
     )
     return {
         "session_id": current_session_id,
         "answer": answer,
         "provider": selected_provider,
         "model": selected_model,
-        "sources": [source.__dict__ for source in source_payload],
+        "sources": source_payload,
     }

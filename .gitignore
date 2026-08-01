@@ -24,10 +24,14 @@ __pycache__/
 vectorstore/
 kami/data/.translation_cache.json
 kami/data/chat_sessions.json
+kami/data/chat_memory.sqlite3*
+kami/data/rag_index/
 
 # OS files
 .DS_Store
 Thumbs.db
 
 # Other
-tasks.txt
+task_01.txt
+task_02.txt
+/SYSTEM_PIPELINE.txt

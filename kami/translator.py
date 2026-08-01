@@ -17,6 +17,7 @@ from .paths import (
     object_raw_path,
     object_translation_path,
 )
+from .series import enrich_record_series
 
 
 DEFAULT_MODEL = "Qwen/Qwen2.5-14B-Instruct-AWQ"
@@ -62,6 +63,13 @@ PRESERVED_VALUE_KEYS = {
     "list_image",
     "element",
     "object_type",
+    "original_name",
+    "series_key",
+    "series_name",
+    "series_aliases",
+    "series_expected_elements",
+    "series_lifecycle",
+    "series_detection",
     "release_date",
     "unlock_weapon_url",
     "unlock_kamihime_url",
@@ -541,7 +549,7 @@ class LocalJapaneseEnglishTranslator:
         if isinstance(value, dict):
             translated: dict[str, Any] = {}
             for key, child in value.items():
-                translated_key = KEY_TRANSLATIONS.get(key)
+                translated_key = key if key in PRESERVED_VALUE_KEYS else KEY_TRANSLATIONS.get(key)
                 if translated_key is None:
                     translated_key = self._translate_text(key)
                 translated[translated_key] = (
@@ -575,7 +583,22 @@ class LocalJapaneseEnglishTranslator:
             self.collect_texts(records),
             progress_callback,
         )
-        return [self._translate_value(record) for record in records]
+        translated_records: list[dict] = []
+        for record in records:
+            translated = self._translate_value(record)
+            info = record.get("info") if isinstance(record.get("info"), dict) else {}
+            object_type = str(info.get("object_type") or "")
+            original_name = str(
+                info.get("original_name") or info.get("name") or ""
+            )
+            if object_type:
+                enrich_record_series(
+                    translated,
+                    object_type,
+                    original_name,
+                )
+            translated_records.append(translated)
+        return translated_records
 
     def translate_texts(
         self,
@@ -1048,10 +1071,19 @@ def translate_object_elements(
 
     counts: dict[str, int] = {}
     for normalized, records in element_records.items():
-        translated = [
-            translator._translate_value(record)
-            for record in records
-        ]
+        translated = []
+        for record in records:
+            value = translator._translate_value(record)
+            info = record.get("info") if isinstance(record.get("info"), dict) else {}
+            original_name = str(
+                info.get("original_name") or info.get("name") or ""
+            )
+            enrich_record_series(
+                value,
+                selected_object_type,
+                original_name,
+            )
+            translated.append(value)
         _atomic_write_jsonl(
             translated,
             object_translation_path(

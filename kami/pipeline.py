@@ -14,6 +14,8 @@ from .paths import (
     normalize_translation_provider,
 )
 from .translator import translate_object_elements
+from .agent.retrieval import refresh_rag_index
+from .series import reconcile_series_data, series_source_urls
 
 
 DEFAULT_UPDATE_TRANSLATION_PROVIDER = "deepl"
@@ -156,6 +158,17 @@ def _run_update(mode: str, object_type: str, provider: str) -> None:
             removed_entries = sum(
                 result["removed_entries"] for result in results.values()
             )
+            changed_source_urls = [
+                source_url
+                for result in results.values()
+                for source_url in result.get("new_source_urls", [])
+            ]
+            reconcile_series_data(
+                DATA_DIR,
+                object_type,
+                changed_source_urls=changed_source_urls,
+                allow_auto_attach=object_type in {"weapon", "eidolon"},
+            )
             _set_status(
                 state="translating",
                 mode=mode,
@@ -169,6 +182,12 @@ def _run_update(mode: str, object_type: str, provider: str) -> None:
                 _translation_progress,
                 provider=provider,
             )
+            _set_status(
+                state="indexing",
+                message="Refreshing the agentic RAG index...",
+                progress=99,
+            )
+            refresh_rag_index(object_type)
             message = (
                 f"Latest update completed: {new_entries} new entries, "
                 f"{crawled_details} new detail pages crawled, "
@@ -176,6 +195,7 @@ def _run_update(mode: str, object_type: str, provider: str) -> None:
                 f"{sum(translated.values())} records rendered in English"
             )
         elif mode == "database":
+            source_urls_before = series_source_urls(DATA_DIR, object_type)
             _set_status(
                 state="updating",
                 mode=mode,
@@ -191,6 +211,15 @@ def _run_update(mode: str, object_type: str, provider: str) -> None:
                 DATA_DIR,
                 _crawl_progress,
             )
+            changed_source_urls = (
+                series_source_urls(DATA_DIR, object_type) - source_urls_before
+            )
+            reconcile_series_data(
+                DATA_DIR,
+                object_type,
+                changed_source_urls=changed_source_urls,
+                allow_auto_attach=object_type in {"weapon", "eidolon"},
+            )
             _set_status(
                 state="translating",
                 mode=mode,
@@ -204,6 +233,12 @@ def _run_update(mode: str, object_type: str, provider: str) -> None:
                 _translation_progress,
                 provider=provider,
             )
+            _set_status(
+                state="indexing",
+                message="Refreshing the agentic RAG index...",
+                progress=99,
+            )
+            refresh_rag_index(object_type)
             total = sum(counts.values())
             summary = ", ".join(
                 f"{element}: {count}" for element, count in counts.items()
@@ -255,6 +290,12 @@ def _run_translation(provider: str, object_type: str) -> None:
             _translation_progress,
             provider=provider,
         )
+        _set_status(
+            state="indexing",
+            message="Refreshing the agentic RAG index...",
+            progress=99,
+        )
+        refresh_rag_index(object_type)
         total = sum(translated.values())
         summary = ", ".join(
             f"{element}: {count}" for element, count in translated.items()
@@ -289,7 +330,7 @@ def start_update(
     selected_object_type = normalize_object_type(object_type)
     selected_provider = normalize_translation_provider(provider)
     with _lock:
-        if _status["state"] in {"starting", "updating", "translating"}:
+        if _status["state"] in {"starting", "updating", "translating", "indexing"}:
             return False
         _status.update(
             {
@@ -334,7 +375,7 @@ def start_translation(
             + ", ".join(TRANSLATION_PROVIDERS)
         )
     with _lock:
-        if _status["state"] in {"starting", "updating", "translating"}:
+        if _status["state"] in {"starting", "updating", "translating", "indexing"}:
             return False
         _status.update(
             {

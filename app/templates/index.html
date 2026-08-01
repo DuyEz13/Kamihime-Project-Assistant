@@ -6,7 +6,7 @@
     <div class="chat-welcome">
       <span class="assistant-logo">K</span>
       <h1>How can I help with Kamihime?</h1>
-      <p>Ask about characters, elements, skills, release data, or acquisition data.</p>
+      <p>Ask about Kamihime, Eidolons, Weapons, elements, skills, effects, or acquisition data.</p>
       <div class="prompt-suggestions">
         <button type="button" data-prompt="Show me notable Fire characters">Notable Fire characters</button>
         <button type="button" data-prompt="Compare Nike and Sol">Compare two characters</button>
@@ -23,6 +23,7 @@
         <select id="chat-model-provider" aria-label="Chat model provider">
           <option value="gpt">GPT</option>
           <option value="gemini">Gemini</option>
+          <option value="deepseek">DeepSeek</option>
         </select>
       </label>
     </div>
@@ -30,7 +31,7 @@
       <textarea id="chat-input" rows="1" placeholder="Message KamiWiki..." aria-label="Chat message"></textarea>
       <button class="send-button" type="submit" aria-label="Send message">↑</button>
     </form>
-    <p class="composer-note">KamiWiki only answers questions about Kamihime Project characters from the translated local database.</p>
+    <p class="composer-note">KamiWiki answers from the translated local Kamihime, Eidolon, and Weapon database.</p>
   </div>
 </section>
 {% endblock %}

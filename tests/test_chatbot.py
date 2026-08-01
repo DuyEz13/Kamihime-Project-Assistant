@@ -111,6 +111,35 @@ def test_domain_question_calls_model_and_persists_memory(tmp_path, monkeypatch):
     assert chatbot.list_sessions()[0]["title"] == "Tell me about Nike skills"
 
 
+def test_vietnamese_question_persists_language_and_guards_model_prompt(
+    tmp_path,
+    monkeypatch,
+):
+    memory_path = tmp_path / "chat_sessions.json"
+    monkeypatch.setattr(chatbot, "CHAT_MEMORY_PATH", memory_path)
+    monkeypatch.setattr(chatbot, "load_characters", _characters)
+    monkeypatch.setenv("KAMI_AGENT_DISABLE_LLM_PLANNER", "1")
+    calls = []
+
+    def fake_model(_provider, _model, _session_id, message, _context):
+        calls.append(message)
+        return "Nike là Kamihime hệ Thủy."
+
+    monkeypatch.setattr(chatbot, "_call_model", fake_model)
+
+    response = chatbot.answer_chat(
+        "Hãy cho tôi biết thông tin về Kamihime Nike",
+        provider="gpt",
+        client_id="vi-client",
+    )
+
+    assert response["answer"].startswith("Nike là")
+    assert "Required response language: Vietnamese (vi)" in calls[0]
+    stored = json.loads(memory_path.read_text(encoding="utf-8"))
+    state = stored["sessions"][response["session_id"]]["state"]
+    assert state["long_term"]["language"] == "vi"
+
+
 def test_delete_session_removes_history(tmp_path, monkeypatch):
     memory_path = tmp_path / "chat_sessions.json"
     monkeypatch.setattr(chatbot, "CHAT_MEMORY_PATH", memory_path)
@@ -168,7 +197,8 @@ def test_followup_prioritizes_previous_answer_sources_over_generic_terms(tmp_pat
     )
 
     assert second["sources"][0]["name"] == "Phoenix Cry"
-    assert contexts[-1].find("Name: Phoenix Cry") < contexts[-1].find("Name: Ra")
+    assert "Name: Phoenix Cry" in contexts[-1]
+    assert all(source["name"] != "Ra" for source in second["sources"])
 
 
 def test_chat_provider_retries_transient_http_status(monkeypatch):

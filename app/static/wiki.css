@@ -874,6 +874,12 @@ button { cursor: pointer; }
   width: 34%;
   vertical-align: middle;
 }
+.chat-sources a {
+  color: inherit;
+  font-weight: 650;
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
 .info-table td {
   vertical-align: middle;
   background: white;

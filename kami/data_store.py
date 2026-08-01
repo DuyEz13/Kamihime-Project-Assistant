@@ -16,6 +16,7 @@ from .paths import (
     object_translation_path,
     translation_provider_order,
 )
+from .series import SERIES_INFO_KEYS, enrich_info_series, enrich_record_series
 
 RAW_DATA_PATH = BASE_DIR / "kami" / "kamihime_raw.jsonl"
 ENGLISH_DATA_PATH = BASE_DIR / "kami" / "kamihime_en.jsonl"
@@ -36,6 +37,7 @@ INTERNAL_INFO_KEYS = {
     "list_summary",
     "unlock_weapon_url",
     "unlock_kamihime_url",
+    *SERIES_INFO_KEYS,
 }
 
 
@@ -106,6 +108,10 @@ def _object_data_paths(object_type: str = "kamihime") -> list[Path]:
     if ENGLISH_DATA_PATH.exists():
         return [ENGLISH_DATA_PATH]
     return [LEGACY_DATA_PATH]
+
+
+def _object_raw_paths(object_type: str) -> list[Path]:
+    return sorted((DATA_DIR / object_type).glob("*/raw.jsonl"))
 
 
 def _data_paths() -> list[Path]:
@@ -417,10 +423,32 @@ def get_character(slug: str) -> dict[str, Any] | None:
 def _load_catalog_cached(
     object_type: str,
     path_signatures: tuple[tuple[str, int], ...],
+    raw_path_signatures: tuple[tuple[str, int], ...] = (),
 ) -> tuple[dict[str, Any], ...]:
     records: list[dict[str, Any]] = []
     for path_string, _modified_ns in path_signatures:
         records.extend(_read_jsonl(Path(path_string)))
+    raw_info_by_url: dict[str, dict[str, Any]] = {}
+    for path_string, _modified_ns in raw_path_signatures:
+        for raw_record in _read_jsonl(Path(path_string)):
+            enrich_record_series(raw_record, object_type)
+            raw_info = (
+                raw_record.get("info")
+                if isinstance(raw_record.get("info"), dict)
+                else {}
+            )
+            source_url = str(raw_info.get("source_url") or "")
+            original_name = str(
+                raw_info.get("original_name") or raw_info.get("name") or ""
+            )
+            if source_url:
+                raw_info_by_url[source_url] = {
+                    key: value
+                    for key, value in raw_info.items()
+                    if key in SERIES_INFO_KEYS
+                }
+                if original_name:
+                    raw_info_by_url[source_url]["original_name"] = original_name
 
     used_slugs: dict[str, int] = {}
     objects: list[dict[str, Any]] = []
@@ -430,7 +458,22 @@ def _load_catalog_cached(
         used_slugs[base_slug] = used_slugs.get(base_slug, 0) + 1
         suffix = used_slugs[base_slug]
         slug = base_slug if suffix == 1 else f"{base_slug}-{suffix}"
-        info = record.get("info") if isinstance(record.get("info"), dict) else {}
+        info = (
+            dict(record.get("info"))
+            if isinstance(record.get("info"), dict)
+            else {}
+        )
+        source_url = str(info.get("source_url") or "")
+        raw_series_info = raw_info_by_url.get(source_url, {})
+        for key, value in raw_series_info.items():
+            if value not in (None, "", []):
+                info[key] = value
+        original_name = str(
+            info.get("original_name")
+            or info.get("name")
+            or ""
+        )
+        enrich_info_series(info, object_type, original_name)
         stats = record.get("stats")
         bursts = record.get("bursts")
         weapon_skills = record.get("weapon_skills")
@@ -464,6 +507,17 @@ def _load_catalog_cached(
                 "slug": slug,
                 "object_type": object_type,
                 "name": name,
+                "original_name": str(info.get("original_name") or ""),
+                "series_key": str(info.get("series_key") or ""),
+                "series_name": str(info.get("series_name") or ""),
+                "series_aliases": list(info.get("series_aliases") or []),
+                "series_expected_elements": list(
+                    info.get("series_expected_elements") or []
+                ),
+                "series_lifecycle": str(
+                    info.get("series_lifecycle") or "complete"
+                ),
+                "series_detection": str(info.get("series_detection") or ""),
                 "image": str(
                     info.get("image")
                     or info.get("img")
@@ -506,6 +560,24 @@ def _load_catalog_cached(
                 "flavor": record.get("flavor") or "",
             }
         )
+    series_groups: dict[str, list[dict[str, Any]]] = {}
+    for item in objects:
+        key = str(item.get("series_key") or "")
+        if key:
+            series_groups.setdefault(key, []).append(item)
+    for members in series_groups.values():
+        elements = list(
+            dict.fromkeys(
+                str(member.get("element") or "")
+                for member in members
+                if member.get("element")
+            )
+        )
+        slugs = [str(member.get("slug") or "") for member in members]
+        for member in members:
+            member["series_catalog_elements"] = elements
+            member["series_catalog_member_count"] = len(members)
+            member["series_catalog_slugs"] = slugs
     return tuple(objects)
 
 
@@ -522,8 +594,16 @@ def load_catalog_items(
             (str(path), path.stat().st_mtime_ns if path.exists() else 0)
             for path in paths
         )
+        raw_signatures = tuple(
+            (str(path), path.stat().st_mtime_ns if path.exists() else 0)
+            for path in _object_raw_paths(selected_object_type)
+        )
         objects = list(
-            _load_catalog_cached(selected_object_type, signatures)
+            _load_catalog_cached(
+                selected_object_type,
+                signatures,
+                raw_signatures,
+            )
         )
 
     if element is None:
