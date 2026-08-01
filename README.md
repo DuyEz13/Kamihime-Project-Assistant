@@ -21,56 +21,7 @@ uv sync --extra rag
 uv sync --all-extras
 ```
 
-Configure local translation with:
-
-```dotenv
-KAMI_TRANSLATION_MODEL=Qwen/Qwen2.5-14B-Instruct-AWQ
-KAMI_TRANSLATION_DEVICE=cuda
-KAMI_TRANSLATION_BATCH_SIZE=8
-KAMI_TRANSLATION_MAX_CHARS=500
-KAMI_TRANSLATION_MAX_NEW_TOKENS=2048
-KAMI_TRANSLATION_MEMORY_EXAMPLES=6
-KAMI_TRANSLATION_MEMORY_SCAN=500
-```
-
-The translator uses `Qwen/Qwen2.5-14B-Instruct-AWQ` and requires an NVIDIA CUDA
-GPU on Linux.
-
-### DeepL API alternative
-
-DeepL API Free currently includes up to 1,000,000 translated source characters
-per account.
-
-Set the provider and API key in `.env`:
-
-```dotenv
-KAMI_TRANSLATION_PROVIDER=deepl
-DEEPL_AUTH_KEY=your_deepl_api_key
-DEEPL_MODEL_TYPE=prefer_quality_optimized
-DEEPL_TRANSLATION_BATCH_SIZE=50
-DEEPL_REQUIRE_GLOSSARY=1
-DEEPL_GLOSSARY_NAME=KamiWiki JA-EN
-```
-
-### Google Translate API alternative
-
-Google Translate uses the existing `httpx` dependency and writes output to its
-own provider folder. Set an API key in `.env`:
-
-```dotenv
-KAMI_TRANSLATION_PROVIDER=google
-GOOGLE_TRANSLATE_API_KEY=your_google_translate_api_key
-GOOGLE_TRANSLATE_BATCH_SIZE=50
-```
-
-Add or correct game terminology in `kami/translation_glossary.json`. Before
-translation, KamiWiki creates or reuses the stable glossary named by
-`DEEPL_GLOSSARY_NAME` and synchronizes its complete JA-EN dictionary with this
-file. Legacy hash-named KamiWiki glossaries are renamed automatically during
-the first synchronization. To manage a specific existing multilingual
-glossary instead, set `DEEPL_GLOSSARY_ID`; its JA-EN dictionary will be
-synchronized too. Set `DEEPL_REQUIRE_GLOSSARY=0` only when testing without
-terminology enforcement.
+## Data Crawling
 
 Full database crawling is intentionally conservative because the source wiki can return HTTP 429 when requests arrive too quickly. The default setup uses one detail worker, a global request interval, randomized per-character delay and exponential backoff with jitter:
 
@@ -89,13 +40,48 @@ KAMI_HTTP_429_COOLDOWN=45
 If the wiki still returns 429, increase `KAMI_REQUEST_INTERVAL` and
 `KAMI_HTTP_429_COOLDOWN` before increasing workers. `Retry-After` headers are honored when the site provides them.
 
-## Run
+## Translation after crawling
 
-```powershell
-uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+### Local LLM
+
+Configure local translation with:
+
+```dotenv
+KAMI_TRANSLATION_MODEL=Qwen/Qwen2.5-14B-Instruct-AWQ
+KAMI_TRANSLATION_DEVICE=cuda
+KAMI_TRANSLATION_BATCH_SIZE=8
+KAMI_TRANSLATION_MAX_CHARS=500
+KAMI_TRANSLATION_MAX_NEW_TOKENS=2048
+KAMI_TRANSLATION_MEMORY_EXAMPLES=6
+KAMI_TRANSLATION_MEMORY_SCAN=500
 ```
 
-Open `http://127.0.0.1:8000/`.
+The translator uses `Qwen/Qwen2.5-14B-Instruct-AWQ` and requires an NVIDIA CUDA GPU on Linux.
+
+### DeepL API alternative
+
+DeepL API Free currently includes up to 1,000,000 translated source characters per account. Set the provider and API key in `.env`:
+
+```dotenv
+KAMI_TRANSLATION_PROVIDER=deepl
+DEEPL_AUTH_KEY=your_deepl_api_key
+DEEPL_MODEL_TYPE=prefer_quality_optimized
+DEEPL_TRANSLATION_BATCH_SIZE=50
+DEEPL_REQUIRE_GLOSSARY=1
+DEEPL_GLOSSARY_NAME=KamiWiki JA-EN
+```
+
+### Google Translate API alternative
+
+Google Translate uses the existing `httpx` dependency and writes output to its own provider folder. Set an API key in `.env`:
+
+```dotenv
+KAMI_TRANSLATION_PROVIDER=google
+GOOGLE_TRANSLATE_API_KEY=your_google_translate_api_key
+GOOGLE_TRANSLATE_BATCH_SIZE=50
+```
+
+Add or correct game terminology in `kami/translation_glossary.json`. Before translation, KamiWiki creates or reuses the stable glossary named by `DEEPL_GLOSSARY_NAME` and synchronizes its complete JA-EN dictionary with this file. Legacy hash-named KamiWiki glossaries are renamed automatically during the first synchronization. To manage a specific existing multilingual glossary instead, set `DEEPL_GLOSSARY_ID`; its JA-EN dictionary will be synchronized too. Set `DEEPL_REQUIRE_GLOSSARY=0` only when testing without terminology enforcement.
 
 ## Asisstant Chatbot
 
@@ -142,6 +128,14 @@ To build with an existing CUDA-enabled Python environment:
 ```powershell
 python scripts/build_rag_index.py --device cuda
 ```
+
+## How to run
+
+```powershell
+uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Open `http://127.0.0.1:8000/`.
 
 ## Project Structure
 
