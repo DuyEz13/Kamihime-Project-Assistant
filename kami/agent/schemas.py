@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal, TypedDict
+from typing import Any, Literal, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -95,4 +95,5 @@ class AgentState(TypedDict, total=False):
     sources: list[dict]
     context: str
     retrieval_issue: str
+    retrieval_diagnostics: dict[str, Any]
     answer: str

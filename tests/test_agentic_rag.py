@@ -289,10 +289,14 @@ def test_latest_agent_returns_only_max_date_ties_without_vector_search(monkeypat
 
     assert [source["name"] for source in result["sources"]] == ["Newest A", "Newest B"]
     assert all(source["retrieval_mode"] == "catalog_latest" for source in result["sources"])
-    assert (
-        "Kamihime: maximum release date 2026-07-30 (2 tied newest records)."
-        in contexts[0]
-    )
+    assert result["retrieval_diagnostics"]["selection_by_type"]["kamihime"] == {
+        "matching_count": 3,
+        "valid_date_count": 3,
+        "latest_date": "2026-07-30",
+        "selected_count": 2,
+        "reason_code": "selected_maximum_release_date",
+    }
+    assert "maximum release date" not in contexts[0]
     assert "Name: Older" not in contexts[0]
 
 
@@ -499,6 +503,72 @@ def test_explicit_section_retrieval_does_not_add_basic(
     assert set(result["sources"][0]["sections"]) == expected_sections
 
 
+def test_answer_context_excludes_internal_retrieval_diagnostics(monkeypatch):
+    monkeypatch.setenv("KAMI_AGENT_DISABLE_LLM_PLANNER", "1")
+    item = _complete_item(
+        "The Little Mermaid",
+        "the-little-mermaid",
+        "water",
+        "eidolon",
+    )
+    item["release_date"] = "2026/06/22"
+    contexts = []
+
+    result = run_agent(
+        session_id="clean-answer-context",
+        client_id="client-1",
+        provider="gpt",
+        model="test-model",
+        message="tìm thông tin về eidolon mới nhất hệ nước",
+        history=[],
+        memory_state={},
+        answer_callback=lambda *_args: contexts.append(_args[-1]) or "done",
+        loader=lambda selected: [item] if selected == "eidolon" else [],
+    )
+
+    for forbidden in (
+        "Available database sections:",
+        "Included sections:",
+        "Evidence coverage:",
+        "Context selection mode:",
+        "Intentionally omitted sections:",
+        "Omission reason:",
+        "Retrieval mode:",
+        "Series coverage:",
+        "Selected by maximum release date",
+    ):
+        assert forbidden not in contexts[0]
+
+    diagnostics = result["retrieval_diagnostics"]
+    assert diagnostics["mode"] == "catalog_latest"
+    assert diagnostics["reason_code"] == "selected_maximum_release_date"
+    assert diagnostics["latest_dates"]["eidolon"] == "2026-06-22"
+    assert diagnostics["evidence"][0]["coverage_complete"] is True
+    assert diagnostics["evidence"][0]["omitted_sections"] == []
+
+
+def test_missing_latest_diagnosis_is_internal(monkeypatch):
+    monkeypatch.setenv("KAMI_AGENT_DISABLE_LLM_PLANNER", "1")
+
+    result = run_agent(
+        session_id="missing-latest",
+        client_id="client-1",
+        provider="gpt",
+        model="test-model",
+        message="latest water weapon",
+        history=[],
+        memory_state={},
+        answer_callback=lambda *_args: pytest.fail("answer model must not run"),
+        loader=lambda _object_type: [],
+    )
+
+    assert result["retrieval_diagnostics"]["reason_code"] == (
+        "no_matching_catalog_records"
+    )
+    assert "database" not in result["answer"].casefold()
+    assert "retrieval" not in result["answer"].casefold()
+
+
 def test_latest_catalog_with_only_invalid_dates_reports_date_problem(monkeypatch):
     monkeypatch.setenv("KAMI_AGENT_DISABLE_LLM_PLANNER", "1")
     item = _complete_item("Unknown", "unknown", "water")
@@ -516,7 +586,10 @@ def test_latest_catalog_with_only_invalid_dates_reports_date_problem(monkeypatch
     )
 
     assert result["sources"] == []
-    assert "ng\u00e0y ph\u00e1t h\u00e0nh" in result["answer"].casefold()
+    assert result["retrieval_diagnostics"]["reason_code"] == (
+        "release_date_unavailable"
+    )
+    assert "ng\u00e0y ph\u00e1t h\u00e0nh" not in result["answer"].casefold()
 
 
 def test_latest_catalog_context_reports_mixed_type_statuses(monkeypatch):
@@ -540,9 +613,14 @@ def test_latest_catalog_context_reports_mixed_type_statuses(monkeypatch):
     )
 
     assert [source["name"] for source in result["sources"]] == ["Newest Kami"]
-    assert "Kamihime: maximum release date 2026-01-01" in contexts[0]
-    assert "Eidolon: matching records have no valid release dates." in contexts[0]
-    assert "Weapon: no matching catalog records." in contexts[0]
+    statuses = result["retrieval_diagnostics"]["selection_by_type"]
+    assert statuses["kamihime"]["reason_code"] == (
+        "selected_maximum_release_date"
+    )
+    assert statuses["eidolon"]["reason_code"] == "release_date_unavailable"
+    assert statuses["weapon"]["reason_code"] == "no_matching_catalog_records"
+    assert "valid release dates" not in contexts[0]
+    assert "no matching catalog records" not in contexts[0]
 
 
 def test_latest_catalog_summary_labels_type_and_tie_count_once(monkeypatch):
@@ -555,7 +633,7 @@ def test_latest_catalog_summary_labels_type_and_tie_count_once(monkeypatch):
     records = {"kamihime": [newest_b, newest_a], "weapon": [weapon]}
     contexts = []
 
-    run_agent(
+    result = run_agent(
         session_id="latest-type-summary",
         client_id="client-1",
         provider="gpt",
@@ -567,12 +645,10 @@ def test_latest_catalog_summary_labels_type_and_tie_count_once(monkeypatch):
         loader=lambda object_type: records[object_type],
     )
 
-    assert contexts[0].count(
-        "Kamihime: maximum release date 2026-07-30 (2 tied newest records)."
-    ) == 1
-    assert contexts[0].count(
-        "Weapon: maximum release date 2026-06-01 (1 newest record)."
-    ) == 1
+    statuses = result["retrieval_diagnostics"]["selection_by_type"]
+    assert statuses["kamihime"]["selected_count"] == 2
+    assert statuses["weapon"]["selected_count"] == 1
+    assert contexts[0].count("maximum release date") == 0
 
 
 def test_document_builder_chunks_skill_rows_with_routing_metadata():
@@ -836,9 +912,10 @@ def test_specific_field_query_is_partial_without_claiming_database_sections_miss
         ),
         ["eidolon"],
         loader,
+        {"eidolon": ["stats"]},
     )
 
-    assert {item["section"] for item in evidence} == {"basic", "Stats"}
+    assert {item["section"] for item in evidence} == {"Stats"}
     assert evidence[0]["coverage_complete"] is False
     assert set(evidence[0]["available_sections"]) == {
         "basic",
@@ -1084,7 +1161,10 @@ def test_exact_named_series_with_latest_wording_retains_series_retrieval(monkeyp
     assert {source["selection_mode"] for source in result["sources"]} == {
         "full_series"
     }
-    assert "Series answer policy:" in contexts[0]
+    assert "Series answer policy:" not in contexts[0]
+    assert result["retrieval_diagnostics"]["evidence"][0]["series_name"] == (
+        "Oni Gen 1"
+    )
     assert "Selected by maximum release date" not in contexts[0]
 
 
@@ -1223,8 +1303,8 @@ def test_series_context_references_repeated_shared_effects(monkeypatch):
         loader=loader,
     )
 
-    assert "summarize the shared mechanic once" in contexts[0]
     assert "shared mechanic already shown" in contexts[0]
+    assert "Series answer policy:" not in contexts[0]
 
 
 def test_member_followup_prefers_the_focused_series():
@@ -1261,7 +1341,12 @@ def test_member_followup_prefers_the_focused_series():
         memory_state,
         loader,
     )
-    evidence = retrieve_entity(plan.entities[0], ["eidolon"], loader)
+    evidence = retrieve_entity(
+        plan.entities[0],
+        ["eidolon"],
+        loader,
+        plan.requested_sections,
+    )
 
     assert [(entity.name, entity.object_type) for entity in plan.entities] == [
         ("Ibaraki Doji", "eidolon")
@@ -1269,7 +1354,7 @@ def test_member_followup_prefers_the_focused_series():
     assert {(item["name"], item["series_key"]) for item in evidence} == {
         ("Ibaraki Doji", "eidolon:oni-gen-1")
     }
-    assert {item["section"] for item in evidence} == {"basic", "Main Effect"}
+    assert {item["section"] for item in evidence} == {"Main Effect"}
 
 
 def test_explicit_member_name_wins_over_series_alias_in_its_title(monkeypatch):

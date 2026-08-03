@@ -480,44 +480,109 @@ def _clarify_node(state: AgentState) -> dict[str, Any]:
     }
 
 
-def _catalog_selection_note(
-    selection: CatalogSelection,
-    object_types: list[str],
-) -> str:
-    winner_counts: dict[str, int] = {}
-    for item in selection.items:
-        object_type = str(item.get("object_type") or "")
-        winner_counts[object_type] = winner_counts.get(object_type, 0) + 1
+def _retrieval_diagnostics(
+    plan: QueryPlan,
+    sources: list[dict[str, Any]],
+    selection: CatalogSelection | None,
+    retrieval_issue: str,
+) -> dict[str, Any]:
+    if retrieval_issue:
+        reason_code = retrieval_issue
+    elif selection is not None:
+        reason_code = "selected_maximum_release_date"
+    elif sources:
+        reason_code = "selected_relevant_records"
+    else:
+        reason_code = "no_relevant_evidence"
 
-    lines = ["Selected by maximum release date per object type:"]
-    for object_type in dict.fromkeys(object_types):
-        label = object_type.title()
-        latest = selection.latest_dates.get(object_type)
-        matching_count = selection.matching_counts.get(object_type, 0)
-        valid_date_count = selection.valid_date_counts.get(object_type, 0)
-        if latest is not None:
-            winner_count = winner_counts.get(object_type, 0)
-            count_text = (
-                f"{winner_count} tied newest records"
-                if winner_count != 1
-                else "1 newest record"
-            )
-            lines.append(
-                f"{label}: maximum release date {latest.isoformat()} "
-                f"({count_text})."
-            )
-        elif matching_count and not valid_date_count:
-            lines.append(
-                f"{label}: matching records have no valid release dates."
-            )
-        else:
-            lines.append(f"{label}: no matching catalog records.")
-    return "\n".join(lines) + "\n"
+    diagnostics: dict[str, Any] = {
+        "mode": (
+            "catalog_latest"
+            if selection is not None
+            else str(sources[0].get("retrieval_mode") or "semantic")
+            if sources
+            else "none"
+        ),
+        "reason_code": reason_code,
+        "target_types": list(plan.target_types),
+        "elements": list(plan.elements),
+        "requested_sections": dict(plan.requested_sections),
+        "selected_count": len(sources),
+        "evidence": [],
+    }
+    if selection is not None:
+        selected_counts: dict[str, int] = {}
+        for source in sources:
+            object_type = str(source.get("object_type") or "")
+            selected_counts[object_type] = selected_counts.get(object_type, 0) + 1
+        selection_by_type: dict[str, dict[str, Any]] = {}
+        for object_type in plan.target_types:
+            matching_count = selection.matching_counts.get(object_type, 0)
+            valid_date_count = selection.valid_date_counts.get(object_type, 0)
+            latest = selection.latest_dates.get(object_type)
+            if matching_count == 0:
+                type_reason = "no_matching_catalog_records"
+            elif valid_date_count == 0:
+                type_reason = "release_date_unavailable"
+            else:
+                type_reason = "selected_maximum_release_date"
+            selection_by_type[object_type] = {
+                "matching_count": matching_count,
+                "valid_date_count": valid_date_count,
+                "latest_date": latest.isoformat() if latest else None,
+                "selected_count": selected_counts.get(object_type, 0),
+                "reason_code": type_reason,
+            }
+        diagnostics.update(
+            {
+                "matching_count": selection.matching_count,
+                "valid_date_count": selection.valid_date_count,
+                "matching_counts": dict(selection.matching_counts),
+                "valid_date_counts": dict(selection.valid_date_counts),
+                "latest_dates": {
+                    key: value.isoformat()
+                    for key, value in selection.latest_dates.items()
+                },
+                "selection_by_type": selection_by_type,
+            }
+        )
+
+    series_fields = (
+        "series_key",
+        "series_name",
+        "series_lifecycle",
+        "series_catalog_elements",
+        "series_catalog_member_count",
+        "series_retrieved_member_count",
+        "series_missing_elements",
+        "series_unreleased_elements",
+        "series_coverage_complete",
+    )
+    for source in sources:
+        item = {
+            "name": source.get("name"),
+            "object_type": source.get("object_type"),
+            "slug": source.get("slug"),
+            "element": source.get("element"),
+            "sections": list(source.get("sections") or []),
+            "available_sections": list(source.get("available_sections") or []),
+            "coverage_complete": bool(source.get("coverage_complete")),
+            "omitted_sections": list(source.get("omitted_sections") or []),
+            "omission_reason": source.get("omission_reason") or "",
+            "selection_mode": source.get("selection_mode") or "full_entity",
+            "retrieval_mode": source.get("retrieval_mode") or "semantic",
+            "score": source.get("score"),
+            "local_url": source.get("local_url"),
+        }
+        for key in series_fields:
+            item[key] = source.get(key)
+        diagnostics["evidence"].append(item)
+    return diagnostics
 
 
 def _retrieve_node(state: AgentState, loader: CatalogLoader) -> dict[str, Any]:
     plan = state["plan"]
-    selection_note = ""
+    selection: CatalogSelection | None = None
     retrieval_issue = ""
     if plan.sort_by == "release_date" and not plan.entities:
         selection = select_latest_catalog_items(
@@ -536,15 +601,17 @@ def _retrieve_node(state: AgentState, loader: CatalogLoader) -> dict[str, Any]:
                 "sources": [],
                 "context": "",
                 "retrieval_issue": retrieval_issue,
+                "retrieval_diagnostics": _retrieval_diagnostics(
+                    plan,
+                    [],
+                    selection,
+                    retrieval_issue,
+                ),
             }
         evidence = hydrate_catalog_items(
             selection.items,
             plan.standalone_question,
             requested_sections=plan.requested_sections,
-        )
-        selection_note = _catalog_selection_note(
-            selection,
-            list(plan.target_types),
         )
     else:
         entities = plan.entities or [
@@ -634,50 +701,9 @@ def _retrieve_node(state: AgentState, loader: CatalogLoader) -> dict[str, Any]:
     shared_effect_owner: dict[str, int] = {}
     for index, items in enumerate(evidence_groups.values(), start=1):
         first = items[0]
-        available = first.get("available_sections") or [
-            item["section"] for item in items
-        ]
-        included = first.get("included_sections") or [
-            item["section"] for item in items
-        ]
-        coverage = "complete" if first.get("coverage_complete") else "partial"
-        selection_lines = (
-            f"Context selection mode: {first.get('selection_mode', 'full_entity')}\n"
-            f"Intentionally omitted sections: "
-            f"{', '.join(first.get('omitted_sections') or []) or 'none'}\n"
-            f"Omission reason: {first.get('omission_reason') or 'none'}\n"
-        )
         series_lines = ""
-        if (
-            first.get("series_key")
-            and first.get("selection_mode") != "catalog_latest"
-        ):
-            series_coverage = (
-                "complete"
-                if first.get("series_coverage_complete")
-                else "partial"
-            )
-            series_lines = (
-                f"Series: {first.get('series_name')} "
-                f"({first.get('series_key')})\n"
-                "Observed series elements: "
-                f"{', '.join(first.get('series_elements') or [])}\n"
-                "Expected series elements: "
-                f"{', '.join(first.get('series_expected_elements') or [])}\n"
-                f"Series lifecycle: {first.get('series_lifecycle') or 'complete'}\n"
-                "Catalog series elements: "
-                f"{', '.join(first.get('series_catalog_elements') or [])}\n"
-                "Unreleased series elements: "
-                f"{', '.join(first.get('series_unreleased_elements') or []) or 'none'}\n"
-                "Missing series elements: "
-                f"{', '.join(first.get('series_missing_elements') or []) or 'none'}\n"
-                f"Series coverage: {series_coverage}\n"
-                "Series answer policy: Compare effects across members. When the "
-                "mechanics are the same apart from element, names, wording, or "
-                "translation variation, summarize the shared mechanic once and "
-                "list only meaningful differences. Give full per-member effect "
-                "progression only when the user explicitly asks for those members.\n"
-            )
+        if first.get("series_name"):
+            series_lines = f"Series: {first.get('series_name')}\n"
         section_blocks: list[str] = []
         for item in items:
             effect_group_id = str(item.get("effect_group_id") or "")
@@ -695,17 +721,11 @@ def _retrieve_node(state: AgentState, loader: CatalogLoader) -> dict[str, Any]:
         context_blocks.append(
             f"[S{index}] {first['object_type'].title()} / {first['name']} / "
             f"{first['element']}\n"
-            f"Available database sections: {', '.join(available)}\n"
-            f"Included sections: {', '.join(included)}\n"
-            f"Evidence coverage: {coverage}\n"
-            f"{selection_lines}"
             f"{series_lines}"
-            f"Retrieval mode: {first.get('retrieval_mode', 'semantic')}\n\n"
+            "\n"
             f"{sections}"
         )
     context = "\n\n".join(context_blocks)
-    if selection_note:
-        context = f"{selection_note}\n{context}"
     summary = str(state.get("memory_state", {}).get("summary") or "")
     if summary:
         context = f"Conversation summary:\n{summary}\n\n{context}"
@@ -714,6 +734,12 @@ def _retrieve_node(state: AgentState, loader: CatalogLoader) -> dict[str, Any]:
         "sources": sources,
         "context": context,
         "retrieval_issue": retrieval_issue,
+        "retrieval_diagnostics": _retrieval_diagnostics(
+            plan,
+            sources,
+            selection,
+            retrieval_issue,
+        ),
     }
 
 
@@ -755,25 +781,12 @@ def _after_retrieve(state: AgentState) -> str:
 
 
 def _missing_node(state: AgentState) -> dict[str, Any]:
-    if state.get("retrieval_issue") == "release_date_unavailable":
-        answer = (
-            "Các bản ghi phù hợp chưa có ngày phát hành hợp lệ để xác định đối tượng mới nhất."
-            if _state_language(state) == "vi"
-            else "The matching records do not have valid release dates, so the newest object cannot be determined."
-        )
-    else:
-        answer = (
-            "Cơ sở dữ liệu Kamihime Project cục bộ không có đủ thông tin để trả lời "
-            "câu hỏi này."
-            if _state_language(state) == "vi"
-            else (
-                "The local Kamihime Project database does not contain enough "
-                "information to answer that question."
-            )
-        )
-    return {
-        "answer": answer
-    }
+    answer = (
+        "Tôi chưa tìm thấy thông tin phù hợp cho câu hỏi này."
+        if _state_language(state) == "vi"
+        else "I could not find matching information for that question."
+    )
+    return {"answer": answer}
 
 
 def run_agent(
