@@ -7,7 +7,7 @@ from typing import Any, Callable
 from langgraph.graph import END, START, StateGraph
 
 from ..data_store import load_catalog_items
-from .catalog_query import select_latest_catalog_items
+from .catalog_query import CatalogSelection, select_latest_catalog_items
 from .documents import CatalogLoader, OBJECT_TYPES
 from .language import detect_response_language, guarded_question, language_name
 from .providers import model_info, plan_with_model
@@ -129,11 +129,15 @@ def _ground_query_constraints(plan: QueryPlan, message: str) -> QueryPlan:
         plan.sort_order = "desc"
         plan.result_limit = 1
         plan.include_ties = True
-        if not plan.target_types:
+        if not detected_types and not plan.entities:
+            plan.target_types = []
             plan.needs_clarification = True
             plan.clarification_question = (
                 "Please specify Kamihime, Eidolon, or Weapon."
             )
+        else:
+            plan.needs_clarification = False
+            plan.clarification_question = None
     return plan
 
 
@@ -355,6 +359,24 @@ def _ground_model_entities(
 
     exact_series = exact_series_matches(message, object_types, loader)
     if not exact_series:
+        if _latest_requested(message):
+            plan.entities = _deterministic_entities(
+                message,
+                detected_types,
+                {},
+                loader,
+            )
+            if plan.entities:
+                plan.target_types = list(
+                    dict.fromkeys(
+                        entity.object_type
+                        for entity in plan.entities
+                        if entity.object_type is not None
+                    )
+                )
+                plan.in_domain = True
+                plan.needs_clarification = False
+                plan.clarification_question = None
         return plan
     plan.entities = [
         EntityQuery(
@@ -453,11 +475,46 @@ def _clarify_node(state: AgentState) -> dict[str, Any]:
     }
 
 
+def _catalog_selection_note(
+    selection: CatalogSelection,
+    object_types: list[str],
+) -> str:
+    winner_counts: dict[str, int] = {}
+    for item in selection.items:
+        object_type = str(item.get("object_type") or "")
+        winner_counts[object_type] = winner_counts.get(object_type, 0) + 1
+
+    lines = ["Selected by maximum release date per object type:"]
+    for object_type in dict.fromkeys(object_types):
+        label = object_type.title()
+        latest = selection.latest_dates.get(object_type)
+        matching_count = selection.matching_counts.get(object_type, 0)
+        valid_date_count = selection.valid_date_counts.get(object_type, 0)
+        if latest is not None:
+            winner_count = winner_counts.get(object_type, 0)
+            count_text = (
+                f"{winner_count} tied newest records"
+                if winner_count != 1
+                else "1 newest record"
+            )
+            lines.append(
+                f"{label}: maximum release date {latest.isoformat()} "
+                f"({count_text})."
+            )
+        elif matching_count and not valid_date_count:
+            lines.append(
+                f"{label}: matching records have no valid release dates."
+            )
+        else:
+            lines.append(f"{label}: no matching catalog records.")
+    return "\n".join(lines) + "\n"
+
+
 def _retrieve_node(state: AgentState, loader: CatalogLoader) -> dict[str, Any]:
     plan = state["plan"]
     selection_note = ""
     retrieval_issue = ""
-    if plan.sort_by == "release_date":
+    if plan.sort_by == "release_date" and not plan.entities:
         selection = select_latest_catalog_items(
             list(plan.target_types),
             list(plan.elements),
@@ -479,10 +536,10 @@ def _retrieve_node(state: AgentState, loader: CatalogLoader) -> dict[str, Any]:
             selection.items,
             plan.standalone_question,
         )
-        dates = ", ".join(
-            sorted({value.isoformat() for value in selection.latest_dates.values()})
+        selection_note = _catalog_selection_note(
+            selection,
+            list(plan.target_types),
         )
-        selection_note = f"Selected by maximum release date: {dates}\n"
     else:
         entities = plan.entities or [
             EntityQuery(
@@ -629,7 +686,7 @@ def _retrieve_node(state: AgentState, loader: CatalogLoader) -> dict[str, Any]:
             section_blocks.append(item["content"])
         sections = "\n\n".join(section_blocks)
         context_blocks.append(
-            f"{selection_note}[S{index}] {first['object_type'].title()} / {first['name']} / "
+            f"[S{index}] {first['object_type'].title()} / {first['name']} / "
             f"{first['element']}\n"
             f"Available database sections: {', '.join(available)}\n"
             f"Included sections: {', '.join(included)}\n"
@@ -640,6 +697,8 @@ def _retrieve_node(state: AgentState, loader: CatalogLoader) -> dict[str, Any]:
             f"{sections}"
         )
     context = "\n\n".join(context_blocks)
+    if selection_note:
+        context = f"{selection_note}\n{context}"
     summary = str(state.get("memory_state", {}).get("summary") or "")
     if summary:
         context = f"Conversation summary:\n{summary}\n\n{context}"

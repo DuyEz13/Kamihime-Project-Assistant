@@ -84,6 +84,47 @@ def test_latest_query_without_object_type_requests_clarification():
     assert plan.clarification_question
 
 
+def test_untyped_latest_query_rejects_llm_invented_type_and_generic_entity(monkeypatch):
+    wrong_plan = QueryPlan(
+        in_domain=True,
+        standalone_question="Latest Water data",
+        target_types=["weapon"],
+        entities=[
+            EntityQuery(
+                mention="Water Weapon",
+                object_type="weapon",
+                retrieval_query="latest Water Weapon",
+            )
+        ],
+    )
+    item = _complete_item("Invented Winner", "invented-winner", "water", "weapon")
+    monkeypatch.setattr(
+        "kami.agent.graph.model_info",
+        lambda _provider: type("Info", (), {"configured": True})(),
+    )
+    monkeypatch.setattr(
+        "kami.agent.graph.plan_with_model",
+        lambda *_args, **_kwargs: wrong_plan.model_copy(deep=True),
+    )
+
+    result = run_agent(
+        session_id="latest-invented-type",
+        client_id="client-1",
+        provider="gpt",
+        model="test-model",
+        message="latest water data",
+        history=[],
+        memory_state={},
+        answer_callback=lambda *_args: pytest.fail("answer model must not run"),
+        loader=lambda object_type: [item] if object_type == "weapon" else [],
+    )
+
+    assert result["plan"].target_types == []
+    assert result["plan"].entities == []
+    assert result["plan"].needs_clarification is True
+    assert result["sources"] == []
+
+
 def _item(name: str, slug: str, element: str = "fire", object_type: str = "kamihime"):
     item = {
         "name": name,
@@ -203,8 +244,79 @@ def test_latest_agent_returns_only_max_date_ties_without_vector_search(monkeypat
 
     assert [source["name"] for source in result["sources"]] == ["Newest A", "Newest B"]
     assert all(source["retrieval_mode"] == "catalog_latest" for source in result["sources"])
-    assert "Selected by maximum release date: 2026-07-30" in contexts[0]
+    assert (
+        "Kamihime: maximum release date 2026-07-30 (2 tied newest records)."
+        in contexts[0]
+    )
     assert "Name: Older" not in contexts[0]
+
+
+def test_named_object_with_latest_wording_uses_resolved_entity_retrieval(monkeypatch):
+    monkeypatch.setenv("KAMI_AGENT_DISABLE_LLM_PLANNER", "1")
+    procyon = _complete_item("Procyon", "procyon", "water")
+    newer = _complete_item("Newer Other", "newer-other", "water")
+    procyon["release_date"] = "26/07/30"
+    newer["release_date"] = "26/08/01"
+    contexts = []
+
+    result = run_agent(
+        session_id="latest-procyon",
+        client_id="client-1",
+        provider="gpt",
+        model="test-model",
+        message="latest information about Procyon",
+        history=[],
+        memory_state={},
+        answer_callback=lambda *_args: contexts.append(_args[-1]) or "Done.",
+        loader=lambda object_type: [procyon, newer] if object_type == "kamihime" else [],
+    )
+
+    assert [source["name"] for source in result["sources"]] == ["Procyon"]
+    assert result["sources"][0]["retrieval_mode"] == "resolved_entity"
+    assert "Selected by maximum release date" not in contexts[0]
+
+
+def test_llm_named_object_with_latest_wording_is_grounded_from_catalog(monkeypatch):
+    procyon = _complete_item("Procyon", "procyon", "water")
+    newer = _complete_item("Newer Other", "newer-other", "water")
+    procyon["release_date"] = "26/07/30"
+    newer["release_date"] = "26/08/01"
+    model_plan = QueryPlan(
+        in_domain=True,
+        standalone_question="Latest information about Procyon",
+        target_types=["kamihime"],
+        entities=[
+            EntityQuery(
+                mention="Procyon",
+                name="Procyon",
+                object_type="kamihime",
+                retrieval_query="Procyon latest information",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        "kami.agent.graph.model_info",
+        lambda _provider: type("Info", (), {"configured": True})(),
+    )
+    monkeypatch.setattr(
+        "kami.agent.graph.plan_with_model",
+        lambda *_args, **_kwargs: model_plan.model_copy(deep=True),
+    )
+
+    result = run_agent(
+        session_id="latest-procyon-llm",
+        client_id="client-1",
+        provider="gpt",
+        model="test-model",
+        message="latest information about Procyon",
+        history=[],
+        memory_state={},
+        answer_callback=lambda *_args: "Done.",
+        loader=lambda object_type: [procyon, newer] if object_type == "kamihime" else [],
+    )
+
+    assert [source["name"] for source in result["sources"]] == ["Procyon"]
+    assert result["sources"][0]["retrieval_mode"] == "resolved_entity"
 
 
 def test_latest_catalog_context_does_not_present_partial_series_coverage(monkeypatch):
@@ -283,6 +395,62 @@ def test_latest_catalog_with_only_invalid_dates_reports_date_problem(monkeypatch
 
     assert result["sources"] == []
     assert "ng\u00e0y ph\u00e1t h\u00e0nh" in result["answer"].casefold()
+
+
+def test_latest_catalog_context_reports_mixed_type_statuses(monkeypatch):
+    monkeypatch.setenv("KAMI_AGENT_DISABLE_LLM_PLANNER", "1")
+    newest = _complete_item("Newest Kami", "newest-kami", "water")
+    invalid = _complete_item("Unknown Eidolon", "unknown-eidolon", "water", "eidolon")
+    invalid["release_date"] = "-"
+    records = {"kamihime": [newest], "eidolon": [invalid], "weapon": []}
+    contexts = []
+
+    result = run_agent(
+        session_id="latest-mixed-types",
+        client_id="client-1",
+        provider="gpt",
+        model="test-model",
+        message="latest water kamihime eidolon weapon",
+        history=[],
+        memory_state={},
+        answer_callback=lambda *_args: contexts.append(_args[-1]) or "Done.",
+        loader=lambda object_type: records[object_type],
+    )
+
+    assert [source["name"] for source in result["sources"]] == ["Newest Kami"]
+    assert "Kamihime: maximum release date 2026-01-01" in contexts[0]
+    assert "Eidolon: matching records have no valid release dates." in contexts[0]
+    assert "Weapon: no matching catalog records." in contexts[0]
+
+
+def test_latest_catalog_summary_labels_type_and_tie_count_once(monkeypatch):
+    monkeypatch.setenv("KAMI_AGENT_DISABLE_LLM_PLANNER", "1")
+    newest_a = _complete_item("Newest A", "newest-a", "water")
+    newest_b = _complete_item("Newest B", "newest-b", "water")
+    weapon = _complete_item("Newest Weapon", "newest-weapon", "water", "weapon")
+    newest_a["release_date"] = newest_b["release_date"] = "26/07/30"
+    weapon["release_date"] = "26/06/01"
+    records = {"kamihime": [newest_b, newest_a], "weapon": [weapon]}
+    contexts = []
+
+    run_agent(
+        session_id="latest-type-summary",
+        client_id="client-1",
+        provider="gpt",
+        model="test-model",
+        message="latest water kamihime and weapon",
+        history=[],
+        memory_state={},
+        answer_callback=lambda *_args: contexts.append(_args[-1]) or "Done.",
+        loader=lambda object_type: records[object_type],
+    )
+
+    assert contexts[0].count(
+        "Kamihime: maximum release date 2026-07-30 (2 tied newest records)."
+    ) == 1
+    assert contexts[0].count(
+        "Weapon: maximum release date 2026-06-01 (1 newest record)."
+    ) == 1
 
 
 def test_document_builder_chunks_skill_rows_with_routing_metadata():
@@ -767,6 +935,35 @@ def _series_items(series_key: str, series_name: str, alias: str):
         )
         items.append(item)
     return items
+
+
+def test_exact_named_series_with_latest_wording_retains_series_retrieval(monkeypatch):
+    monkeypatch.setenv("KAMI_AGENT_DISABLE_LLM_PLANNER", "1")
+    items = _series_items("eidolon:oni-gen-1", "Oni Gen 1", "Oni base")
+    loader = lambda object_type: items if object_type == "eidolon" else []
+    contexts = []
+
+    result = run_agent(
+        session_id="latest-named-series",
+        client_id="client-1",
+        provider="gpt",
+        model="test-model",
+        message="latest information about Eidolon Oni Gen 1",
+        history=[],
+        memory_state={},
+        answer_callback=lambda *_args: contexts.append(_args[-1]) or "Done.",
+        loader=loader,
+    )
+
+    assert len(result["sources"]) == 6
+    assert {source["retrieval_mode"] for source in result["sources"]} == {
+        "resolved_entity"
+    }
+    assert {source["selection_mode"] for source in result["sources"]} == {
+        "full_series"
+    }
+    assert "Series answer policy:" in contexts[0]
+    assert "Selected by maximum release date" not in contexts[0]
 
 
 def test_exact_generation_suppresses_fuzzy_neighbor_series():

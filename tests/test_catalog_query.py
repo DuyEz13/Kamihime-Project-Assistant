@@ -69,3 +69,44 @@ def test_select_latest_computes_a_maximum_per_explicit_object_type():
     )
 
     assert {item["slug"] for item in selection.items} == {"k", "w"}
+
+
+def test_select_latest_tracks_match_and_valid_date_counts_per_type():
+    records = {
+        "kamihime": [
+            {
+                "name": "K",
+                "slug": "k",
+                "object_type": "kamihime",
+                "element": "water",
+                "release_date": "26/07/30",
+            }
+        ],
+        "eidolon": [
+            {
+                "name": "E",
+                "slug": "e",
+                "object_type": "eidolon",
+                "element": "water",
+                "release_date": "-",
+            }
+        ],
+        "weapon": [],
+    }
+
+    selection = select_latest_catalog_items(
+        ["kamihime", "eidolon", "weapon"],
+        ["water"],
+        lambda object_type: records[object_type],
+    )
+
+    assert selection.matching_counts == {
+        "kamihime": 1,
+        "eidolon": 1,
+        "weapon": 0,
+    }
+    assert selection.valid_date_counts == {
+        "kamihime": 1,
+        "eidolon": 0,
+        "weapon": 0,
+    }

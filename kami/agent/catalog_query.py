@@ -13,6 +13,8 @@ class CatalogSelection:
     items: list[dict[str, Any]]
     matching_count: int
     valid_date_count: int
+    matching_counts: dict[str, int]
+    valid_date_counts: dict[str, int]
     latest_dates: dict[str, date]
 
 
@@ -38,21 +40,22 @@ def select_latest_catalog_items(
     loader: CatalogLoader,
 ) -> CatalogSelection:
     selected_elements = {value.casefold() for value in elements if value}
-    matching_count = 0
-    valid_date_count = 0
+    selected_types = list(dict.fromkeys(object_types))
+    matching_counts = {object_type: 0 for object_type in selected_types}
+    valid_date_counts = {object_type: 0 for object_type in selected_types}
     latest_dates: dict[str, date] = {}
     winners: dict[str, list[dict[str, Any]]] = {}
 
-    for object_type in dict.fromkeys(object_types):
+    for object_type in selected_types:
         for item in loader(object_type):
             element = str(item.get("element") or "").casefold()
             if selected_elements and element not in selected_elements:
                 continue
-            matching_count += 1
+            matching_counts[object_type] += 1
             released = parse_release_date(item.get("release_date"))
             if released is None:
                 continue
-            valid_date_count += 1
+            valid_date_counts[object_type] += 1
             current = latest_dates.get(object_type)
             if current is None or released > current:
                 latest_dates[object_type] = released
@@ -62,7 +65,7 @@ def select_latest_catalog_items(
 
     items = [
         item
-        for object_type in dict.fromkeys(object_types)
+        for object_type in selected_types
         for item in sorted(
             winners.get(object_type, []),
             key=lambda value: (
@@ -73,7 +76,9 @@ def select_latest_catalog_items(
     ]
     return CatalogSelection(
         items=items,
-        matching_count=matching_count,
-        valid_date_count=valid_date_count,
+        matching_count=sum(matching_counts.values()),
+        valid_date_count=sum(valid_date_counts.values()),
+        matching_counts=matching_counts,
+        valid_date_counts=valid_date_counts,
         latest_dates=latest_dates,
     )
