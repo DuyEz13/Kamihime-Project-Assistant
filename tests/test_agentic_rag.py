@@ -171,6 +171,120 @@ def _complete_item(
     return item
 
 
+def test_latest_agent_returns_only_max_date_ties_without_vector_search(monkeypatch):
+    monkeypatch.setenv("KAMI_AGENT_DISABLE_LLM_PLANNER", "1")
+    newest_a = _complete_item("Newest A", "newest-a", "water")
+    newest_b = _complete_item("Newest B", "newest-b", "water")
+    older = _complete_item("Older", "older", "water")
+    wrong_element = _complete_item("New Fire", "new-fire", "fire")
+    newest_a["release_date"] = "26/07/30"
+    newest_b["release_date"] = "2026/07/30"
+    older["release_date"] = "26/06/01"
+    wrong_element["release_date"] = "26/08/01"
+    items = [older, wrong_element, newest_b, newest_a]
+    loader = lambda object_type: items if object_type == "kamihime" else []
+
+    def fail_vector_search(*_args, **_kwargs):
+        raise AssertionError("vector search must not run")
+
+    monkeypatch.setattr("kami.agent.retrieval._qdrant_search", fail_vector_search)
+    contexts = []
+    result = run_agent(
+        session_id="latest-1",
+        client_id="client-1",
+        provider="gpt",
+        model="test-model",
+        message="t\u00ecm th\u00f4ng tin v\u1ec1 kamihime m\u1edbi nh\u1ea5t h\u1ec7 n\u01b0\u1edbc",
+        history=[],
+        memory_state={},
+        answer_callback=lambda *_args: contexts.append(_args[-1]) or "K\u1ebft qu\u1ea3.",
+        loader=loader,
+    )
+
+    assert [source["name"] for source in result["sources"]] == ["Newest A", "Newest B"]
+    assert all(source["retrieval_mode"] == "catalog_latest" for source in result["sources"])
+    assert "Selected by maximum release date: 2026-07-30" in contexts[0]
+    assert "Name: Older" not in contexts[0]
+
+
+def test_latest_catalog_context_does_not_present_partial_series_coverage(monkeypatch):
+    monkeypatch.setenv("KAMI_AGENT_DISABLE_LLM_PLANNER", "1")
+    item = _complete_item("Newest", "newest", "water", "eidolon")
+    item.update(
+        {
+            "series_key": "eidolon:test-series",
+            "series_name": "Test Series",
+            "series_expected_elements": ["fire", "water"],
+            "series_catalog_elements": ["fire", "water"],
+            "series_catalog_member_count": 2,
+        }
+    )
+    contexts = []
+
+    result = run_agent(
+        session_id="latest-series",
+        client_id="client-1",
+        provider="gpt",
+        model="test-model",
+        message="latest water eidolon",
+        history=[],
+        memory_state={},
+        answer_callback=lambda *_args: contexts.append(_args[-1]) or "Done.",
+        loader=lambda object_type: [item] if object_type == "eidolon" else [],
+    )
+
+    assert result["sources"][0]["selection_mode"] == "catalog_latest"
+    assert "Series coverage:" not in contexts[0]
+    assert "Series answer policy:" not in contexts[0]
+
+
+@pytest.mark.parametrize(
+    ("object_type", "message", "expected_sections"),
+    [
+        ("kamihime", "latest water kamihime", {"basic", "Burst", "Ability", "Assist"}),
+        ("eidolon", "latest water eidolon", {"basic", "Stats", "Summon Effect", "Main Effect", "Sub Effect"}),
+        ("weapon", "latest water weapon", {"basic", "Stats", "Burst Effects", "Weapon Skills"}),
+    ],
+)
+def test_latest_catalog_hydrates_all_type_sections(monkeypatch, object_type, message, expected_sections):
+    monkeypatch.setenv("KAMI_AGENT_DISABLE_LLM_PLANNER", "1")
+    item = _complete_item("Newest", "newest", "water", object_type)
+    loader = lambda selected: [item] if selected == object_type else []
+    result = run_agent(
+        session_id=f"latest-{object_type}",
+        client_id="client-1",
+        provider="gpt",
+        model="test-model",
+        message=message,
+        history=[],
+        memory_state={},
+        answer_callback=lambda *_args: "Done.",
+        loader=loader,
+    )
+
+    assert set(result["sources"][0]["sections"]) == expected_sections
+
+
+def test_latest_catalog_with_only_invalid_dates_reports_date_problem(monkeypatch):
+    monkeypatch.setenv("KAMI_AGENT_DISABLE_LLM_PLANNER", "1")
+    item = _complete_item("Unknown", "unknown", "water")
+    item["release_date"] = "-"
+    result = run_agent(
+        session_id="latest-invalid",
+        client_id="client-1",
+        provider="gpt",
+        model="test-model",
+        message="t\u00ecm kamihime m\u1edbi nh\u1ea5t h\u1ec7 n\u01b0\u1edbc",
+        history=[],
+        memory_state={},
+        answer_callback=lambda *_args: pytest.fail("answer model must not run"),
+        loader=lambda object_type: [item] if object_type == "kamihime" else [],
+    )
+
+    assert result["sources"] == []
+    assert "ng\u00e0y ph\u00e1t h\u00e0nh" in result["answer"].casefold()
+
+
 def test_document_builder_chunks_skill_rows_with_routing_metadata():
     documents = object_documents(_item("Alpha", "alpha"))
 

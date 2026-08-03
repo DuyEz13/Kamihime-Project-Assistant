@@ -984,6 +984,25 @@ def _annotate_series_coverage(evidence: list[Evidence]) -> list[Evidence]:
     return evidence
 
 
+def hydrate_catalog_items(
+    items: list[dict[str, Any]],
+    query: str,
+    retrieval_mode: str = "catalog_latest",
+) -> list[Evidence]:
+    evidence: list[Evidence] = []
+    for item in items:
+        evidence.extend(
+            _hydrate_item(
+                item,
+                query,
+                200.0,
+                retrieval_mode,
+                selection_mode=retrieval_mode,
+            )
+        )
+    return _annotate_series_coverage(evidence)
+
+
 def retrieve_entity(
     entity: EntityQuery,
     target_types: list[str],

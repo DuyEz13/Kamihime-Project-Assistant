@@ -93,4 +93,5 @@ class AgentState(TypedDict, total=False):
     evidence: list[Evidence]
     sources: list[dict]
     context: str
+    retrieval_issue: str
     answer: str

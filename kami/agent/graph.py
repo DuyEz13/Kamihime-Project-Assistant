@@ -7,12 +7,14 @@ from typing import Any, Callable
 from langgraph.graph import END, START, StateGraph
 
 from ..data_store import load_catalog_items
+from .catalog_query import select_latest_catalog_items
 from .documents import CatalogLoader, OBJECT_TYPES
 from .language import detect_response_language, guarded_question, language_name
 from .providers import model_info, plan_with_model
 from .retrieval import (
     exact_series_matches,
     contains_normalized_phrase,
+    hydrate_catalog_items,
     normalize_text,
     retrieve_entity,
     series_alias_score,
@@ -453,24 +455,53 @@ def _clarify_node(state: AgentState) -> dict[str, Any]:
 
 def _retrieve_node(state: AgentState, loader: CatalogLoader) -> dict[str, Any]:
     plan = state["plan"]
-    entities = plan.entities or [
-        EntityQuery(
-            mention=plan.standalone_question,
-            retrieval_query=plan.standalone_question,
+    selection_note = ""
+    retrieval_issue = ""
+    if plan.sort_by == "release_date":
+        selection = select_latest_catalog_items(
+            list(plan.target_types),
+            list(plan.elements),
+            loader,
         )
-    ]
-    workers = min(len(entities), max(1, int(os.getenv("KAMI_RAG_ENTITY_WORKERS", "4"))))
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = [
-            executor.submit(
-                retrieve_entity,
-                entity,
-                list(plan.target_types),
-                loader,
+        if not selection.items:
+            retrieval_issue = (
+                "release_date_unavailable"
+                if selection.matching_count and not selection.valid_date_count
+                else "no_matching_catalog_records"
             )
-            for entity in entities
+            return {
+                "evidence": [],
+                "sources": [],
+                "context": "",
+                "retrieval_issue": retrieval_issue,
+            }
+        evidence = hydrate_catalog_items(
+            selection.items,
+            plan.standalone_question,
+        )
+        dates = ", ".join(
+            sorted({value.isoformat() for value in selection.latest_dates.values()})
+        )
+        selection_note = f"Selected by maximum release date: {dates}\n"
+    else:
+        entities = plan.entities or [
+            EntityQuery(
+                mention=plan.standalone_question,
+                retrieval_query=plan.standalone_question,
+            )
         ]
-        evidence = [item for future in futures for item in future.result()]
+        workers = min(len(entities), max(1, int(os.getenv("KAMI_RAG_ENTITY_WORKERS", "4"))))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [
+                executor.submit(
+                    retrieve_entity,
+                    entity,
+                    list(plan.target_types),
+                    loader,
+                )
+                for entity in entities
+            ]
+            evidence = [item for future in futures for item in future.result()]
 
     unique: list[dict] = []
     seen_docs: set[tuple[str, str, str, str]] = set()
@@ -553,7 +584,10 @@ def _retrieve_node(state: AgentState, loader: CatalogLoader) -> dict[str, Any]:
             f"Omission reason: {first.get('omission_reason') or 'none'}\n"
         )
         series_lines = ""
-        if first.get("series_key"):
+        if (
+            first.get("series_key")
+            and first.get("selection_mode") != "catalog_latest"
+        ):
             series_coverage = (
                 "complete"
                 if first.get("series_coverage_complete")
@@ -595,7 +629,7 @@ def _retrieve_node(state: AgentState, loader: CatalogLoader) -> dict[str, Any]:
             section_blocks.append(item["content"])
         sections = "\n\n".join(section_blocks)
         context_blocks.append(
-            f"[S{index}] {first['object_type'].title()} / {first['name']} / "
+            f"{selection_note}[S{index}] {first['object_type'].title()} / {first['name']} / "
             f"{first['element']}\n"
             f"Available database sections: {', '.join(available)}\n"
             f"Included sections: {', '.join(included)}\n"
@@ -613,6 +647,7 @@ def _retrieve_node(state: AgentState, loader: CatalogLoader) -> dict[str, Any]:
         "evidence": unique,
         "sources": sources,
         "context": context,
+        "retrieval_issue": retrieval_issue,
     }
 
 
@@ -654,15 +689,22 @@ def _after_retrieve(state: AgentState) -> str:
 
 
 def _missing_node(state: AgentState) -> dict[str, Any]:
-    answer = (
-        "Cơ sở dữ liệu Kamihime Project cục bộ không có đủ thông tin để trả lời "
-        "câu hỏi này."
-        if _state_language(state) == "vi"
-        else (
-            "The local Kamihime Project database does not contain enough "
-            "information to answer that question."
+    if state.get("retrieval_issue") == "release_date_unavailable":
+        answer = (
+            "Các bản ghi phù hợp chưa có ngày phát hành hợp lệ để xác định đối tượng mới nhất."
+            if _state_language(state) == "vi"
+            else "The matching records do not have valid release dates, so the newest object cannot be determined."
         )
-    )
+    else:
+        answer = (
+            "Cơ sở dữ liệu Kamihime Project cục bộ không có đủ thông tin để trả lời "
+            "câu hỏi này."
+            if _state_language(state) == "vi"
+            else (
+                "The local Kamihime Project database does not contain enough "
+                "information to answer that question."
+            )
+        )
     return {
         "answer": answer
     }
