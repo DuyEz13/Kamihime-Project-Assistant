@@ -687,57 +687,22 @@ def _section_key(value: str) -> str:
     return normalize_text(value).replace(" ", "_")
 
 
-def _requested_sections(query: str, object_type: str) -> set[str] | None:
-    words = set(normalize_text(query).split())
-    selected: set[str] = set()
-
-    if object_type == "kamihime":
-        if words & {"stat", "stats", "hp", "attack", "level", "rarity", "release", "acquisition", "weapon"}:
-            selected.add("basic")
-        if words & {"burst", "ougi"}:
-            selected.add("burst")
-        if words & {"ability", "abilities", "skill", "skills", "cooldown", "interval", "duration"}:
-            selected.update({"ability", "skill"})
-        if words & {"assist", "passive"}:
-            selected.add("assist")
-    elif object_type == "weapon":
-        if words & {"stat", "stats", "hp", "attack", "level", "rarity"}:
-            selected.add("stats")
-        if words & {"burst", "bursts", "ougi"}:
-            selected.add("burst_effects")
-        if words & {"skill", "skills", "effect", "effects"}:
-            selected.add("weapon_skills")
-        if words & {"unlock", "kamihime", "release", "acquisition", "type"}:
-            selected.add("basic")
-    elif object_type == "eidolon":
-        if words & {"stat", "stats", "hp", "attack", "level", "rarity"}:
-            selected.add("stats")
-        if words & {"summon", "summoning", "interval", "duration"}:
-            selected.add("summon_effect")
-        if "main" in words:
-            selected.add("main_effect")
-        if "sub" in words:
-            selected.add("sub_effect")
-        if words & {"effect", "effects"} and not selected & {
-            "summon_effect",
-            "main_effect",
-            "sub_effect",
-        }:
-            selected.update({"summon_effect", "main_effect", "sub_effect"})
-        if words & {"release", "acquisition", "element", "returns"}:
-            selected.add("basic")
-
-    return selected or None
+def sections_for_type(
+    requested_sections: dict[str, list[str]] | None,
+    object_type: str,
+) -> set[str] | None:
+    values = (requested_sections or {}).get(object_type)
+    return set(values) if values else None
 
 
 def _series_section_policy(
     items: list[dict[str, Any]],
-    query: str,
+    requested: set[str] | None,
 ) -> tuple[set[str] | None, str, str]:
     if not items:
         return None, "full_series", ""
     object_type = str(items[0].get("object_type") or "")
-    if _requested_sections(query, object_type) is not None:
+    if requested is not None:
         return None, "explicit_sections", ""
     documents = [doc for item in items for doc in object_documents(item)]
     budget = _env_int("KAMI_RAG_SERIES_CONTEXT_CHARS", 48_000, 4_000)
@@ -794,12 +759,12 @@ def _hydrate_item(
     selection_mode: str = "full_entity",
     omission_reason: str = "",
     shared_effect_signatures: set[str] | None = None,
+    requested: set[str] | None = None,
 ) -> list[Evidence]:
     documents = object_documents(item)
     available_sections = [
         str(doc.metadata.get("section") or "") for doc in documents
     ]
-    requested = _requested_sections(query, str(item.get("object_type") or ""))
     if requested is None and series_overview and allowed_series_sections is not None:
         selected_documents = [
             doc for doc in documents
@@ -812,8 +777,7 @@ def _hydrate_item(
         selected_documents = [
             doc
             for doc in documents
-            if _section_key(str(doc.metadata.get("section") or "")) == "basic"
-            or _section_key(str(doc.metadata.get("section") or "")) in requested
+            if _section_key(str(doc.metadata.get("section") or "")) in requested
         ]
     included_sections = [
         str(doc.metadata.get("section") or "") for doc in selected_documents
@@ -988,6 +952,7 @@ def hydrate_catalog_items(
     items: list[dict[str, Any]],
     query: str,
     retrieval_mode: str = "catalog_latest",
+    requested_sections: dict[str, list[str]] | None = None,
 ) -> list[Evidence]:
     evidence: list[Evidence] = []
     for item in items:
@@ -998,6 +963,10 @@ def hydrate_catalog_items(
                 200.0,
                 retrieval_mode,
                 selection_mode=retrieval_mode,
+                requested=sections_for_type(
+                    requested_sections,
+                    str(item.get("object_type") or ""),
+                ),
             )
         )
     return _annotate_series_coverage(evidence)
@@ -1007,6 +976,7 @@ def retrieve_entity(
     entity: EntityQuery,
     target_types: list[str],
     loader: CatalogLoader = load_catalog_items,
+    requested_sections: dict[str, list[str]] | None = None,
 ) -> list[Evidence]:
     object_types = [entity.object_type] if entity.object_type else target_types
     object_types = [value for value in object_types if value in OBJECT_TYPES]
@@ -1035,7 +1005,13 @@ def retrieve_entity(
                 series_counts[key] += 1
                 series_items[key].append(item)
         series_policies = {
-            key: _series_section_policy(items, query)
+            key: _series_section_policy(
+                items,
+                sections_for_type(
+                    requested_sections,
+                    str(items[0].get("object_type") or ""),
+                ),
+            )
             for key, items in series_items.items()
             if len(items) > 1
         }
@@ -1071,6 +1047,10 @@ def retrieve_entity(
                     policy[1],
                     policy[2],
                     shared_by_series.get(series_key, set()),
+                    sections_for_type(
+                        requested_sections,
+                        str(item.get("object_type") or ""),
+                    ),
                 )
             )
         return _annotate_series_coverage(evidence)
@@ -1120,9 +1100,23 @@ def retrieve_entity(
         group_score = max(value[1] for value in group)
         if item is not None:
             evidence.extend(
-                _hydrate_item(item, query, group_score, retrieval_mode)
+                _hydrate_item(
+                    item,
+                    query,
+                    group_score,
+                    retrieval_mode,
+                    requested=sections_for_type(requested_sections, key[0]),
+                )
             )
         else:
+            requested = sections_for_type(requested_sections, key[0])
+            if requested is not None:
+                group = [
+                    (doc, score)
+                    for doc, score in group
+                    if _section_key(str(doc.metadata.get("section") or ""))
+                    in requested
+                ]
             evidence.extend(
                 _to_evidence(doc, score, retrieval_mode=retrieval_mode)
                 for doc, score in group
@@ -1135,6 +1129,7 @@ def retrieve_plan(
     target_types: list[str],
     standalone_question: str,
     loader: CatalogLoader = load_catalog_items,
+    requested_sections: dict[str, list[str]] | None = None,
 ) -> list[Evidence]:
     if not entities:
         entities = [
@@ -1145,7 +1140,9 @@ def retrieve_plan(
         ]
     results: list[Evidence] = []
     for entity in entities:
-        results.extend(retrieve_entity(entity, target_types, loader))
+        results.extend(
+            retrieve_entity(entity, target_types, loader, requested_sections)
+        )
     seen: set[tuple[str, str, str, str]] = set()
     unique: list[Evidence] = []
     for item in results:

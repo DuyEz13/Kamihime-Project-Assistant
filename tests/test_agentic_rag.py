@@ -422,6 +422,83 @@ def test_latest_catalog_hydrates_all_type_sections(monkeypatch, object_type, mes
     assert set(result["sources"][0]["sections"]) == expected_sections
 
 
+def test_llm_rewrite_cannot_narrow_generic_latest_eidolon(monkeypatch):
+    item = _complete_item(
+        "The Little Mermaid",
+        "the-little-mermaid",
+        "water",
+        "eidolon",
+    )
+    item["release_date"] = "2026/06/22"
+    model_plan = QueryPlan(
+        in_domain=True,
+        standalone_question="Find information about the newest water element eidolon",
+        target_types=["eidolon"],
+        elements=["water"],
+        sort_by="release_date",
+        include_ties=True,
+    )
+    monkeypatch.setattr(
+        "kami.agent.graph.model_info",
+        lambda _provider: type("Info", (), {"configured": True})(),
+    )
+    monkeypatch.setattr(
+        "kami.agent.graph.plan_with_model",
+        lambda *_args, **_kwargs: model_plan.model_copy(deep=True),
+    )
+
+    result = run_agent(
+        session_id="latest-water-eidolon",
+        client_id="client-1",
+        provider="deepseek",
+        model="deepseek-chat",
+        message="tìm thông tin về eidolon mới nhất hệ nước",
+        history=[],
+        memory_state={},
+        answer_callback=lambda *_args: "done",
+        loader=lambda selected: [item] if selected == "eidolon" else [],
+    )
+
+    assert set(result["sources"][0]["sections"]) == {
+        "basic",
+        "Stats",
+        "Summon Effect",
+        "Main Effect",
+        "Sub Effect",
+    }
+
+
+@pytest.mark.parametrize(
+    ("object_type", "message", "expected_sections"),
+    [
+        ("kamihime", "show burst and assist", {"Burst", "Assist"}),
+        ("eidolon", "show stats and summon effect", {"Stats", "Summon Effect"}),
+        ("weapon", "show weapon skills", {"Weapon Skills"}),
+    ],
+)
+def test_explicit_section_retrieval_does_not_add_basic(
+    monkeypatch,
+    object_type,
+    message,
+    expected_sections,
+):
+    monkeypatch.setenv("KAMI_AGENT_DISABLE_LLM_PLANNER", "1")
+    item = _complete_item("Target", "target", "water", object_type)
+    result = run_agent(
+        session_id=f"explicit-{object_type}",
+        client_id="client-1",
+        provider="gpt",
+        model="test-model",
+        message=f"{message} for {object_type} Target",
+        history=[],
+        memory_state={},
+        answer_callback=lambda *_args: "done",
+        loader=lambda selected: [item] if selected == object_type else [],
+    )
+
+    assert set(result["sources"][0]["sections"]) == expected_sections
+
+
 def test_latest_catalog_with_only_invalid_dates_reports_date_problem(monkeypatch):
     monkeypatch.setenv("KAMI_AGENT_DISABLE_LLM_PLANNER", "1")
     item = _complete_item("Unknown", "unknown", "water")

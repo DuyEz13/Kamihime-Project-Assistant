@@ -540,6 +540,7 @@ def _retrieve_node(state: AgentState, loader: CatalogLoader) -> dict[str, Any]:
         evidence = hydrate_catalog_items(
             selection.items,
             plan.standalone_question,
+            requested_sections=plan.requested_sections,
         )
         selection_note = _catalog_selection_note(
             selection,
@@ -560,6 +561,7 @@ def _retrieve_node(state: AgentState, loader: CatalogLoader) -> dict[str, Any]:
                     entity,
                     list(plan.target_types),
                     loader,
+                    plan.requested_sections,
                 )
                 for entity in entities
             ]
