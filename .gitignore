@@ -37,3 +37,5 @@ Thumbs.db
 task_01.txt
 task_02.txt
 /SYSTEM_PIPELINE.txt
+docs/
+tests/
