@@ -1,6 +1,15 @@
 import json
 import logging
 
+import pytest
+from langchain_core.messages import AIMessage
+
+from kami.agent.providers import (
+    answer_with_model,
+    extract_token_usage,
+    plan_with_model,
+)
+from kami.agent.schemas import QueryPlan
 from kami.agent.tracing import create_chat_trace
 
 
@@ -148,3 +157,140 @@ def test_trace_writer_failure_is_non_fatal(tmp_path, monkeypatch, caplog):
         trace.finalize()
 
     assert "disk full" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        (
+            AIMessage(
+                content="ok",
+                usage_metadata={
+                    "input_tokens": 10,
+                    "output_tokens": 4,
+                    "total_tokens": 14,
+                },
+            ),
+            {"input_tokens": 10, "output_tokens": 4, "total_tokens": 14},
+        ),
+        (
+            AIMessage(
+                content="ok",
+                response_metadata={
+                    "token_usage": {
+                        "prompt_tokens": 8,
+                        "completion_tokens": 3,
+                        "total_tokens": 11,
+                    }
+                },
+            ),
+            {"input_tokens": 8, "output_tokens": 3, "total_tokens": 11},
+        ),
+    ],
+)
+def test_extract_token_usage_supports_provider_metadata(message, expected):
+    usage = extract_token_usage(message)
+    assert {key: usage[key] for key in expected} == expected
+    assert usage["usage_available"] is True
+
+
+def test_extract_token_usage_does_not_estimate_missing_values():
+    usage = extract_token_usage(AIMessage(content="ok"))
+    assert usage == {
+        "input_tokens": None,
+        "output_tokens": None,
+        "total_tokens": None,
+        "usage_available": False,
+    }
+
+
+def test_answer_model_emits_provider_usage(monkeypatch):
+    class FakeModel:
+        def invoke(self, _messages):
+            return AIMessage(
+                content="Nike restores HP.",
+                usage_metadata={
+                    "input_tokens": 30,
+                    "output_tokens": 6,
+                    "total_tokens": 36,
+                },
+            )
+
+    monkeypatch.setattr(
+        "kami.agent.providers.create_chat_model",
+        lambda *_args, **_kwargs: FakeModel(),
+    )
+    events = []
+
+    answer = answer_with_model(
+        "gpt",
+        "test-model",
+        [],
+        "Tell me about Nike",
+        "Name: Nike",
+        telemetry=events.append,
+        step="answer",
+    )
+
+    assert answer == "Nike restores HP."
+    assert len(events) == 1
+    assert events[0]["step"] == "answer"
+    assert events[0]["provider"] == "gpt"
+    assert events[0]["model"] == "test-model"
+    assert events[0]["status"] == "ok"
+    assert events[0]["total_tokens"] == 36
+    assert events[0]["duration_ms"] >= 0
+
+
+def test_planner_keeps_raw_message_for_usage(monkeypatch):
+    parsed = QueryPlan(
+        in_domain=True,
+        standalone_question="Tell me about Nike",
+        target_types=["kamihime"],
+    )
+
+    class FakeStructuredModel:
+        def invoke(self, _messages):
+            return {
+                "raw": AIMessage(
+                    content="",
+                    usage_metadata={
+                        "input_tokens": 20,
+                        "output_tokens": 5,
+                        "total_tokens": 25,
+                    },
+                ),
+                "parsed": parsed,
+                "parsing_error": None,
+            }
+
+    class FakeModel:
+        def with_structured_output(self, schema, *, include_raw):
+            assert schema is QueryPlan
+            assert include_raw is True
+            return FakeStructuredModel()
+
+    monkeypatch.setattr(
+        "kami.agent.providers.create_chat_model",
+        lambda *_args, **_kwargs: FakeModel(),
+    )
+    events = []
+
+    result = plan_with_model(
+        "deepseek",
+        "deepseek-chat",
+        "Tell me about Nike",
+        [],
+        {},
+        telemetry=events.append,
+    )
+
+    assert result == parsed
+    assert len(events) == 1
+    assert events[0]["step"] == "planner"
+    assert events[0]["provider"] == "deepseek"
+    assert events[0]["model"] == "deepseek-chat"
+    assert events[0]["status"] == "ok"
+    assert events[0]["input_tokens"] == 20
+    assert events[0]["output_tokens"] == 5
+    assert events[0]["total_tokens"] == 25

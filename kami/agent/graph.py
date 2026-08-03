@@ -10,7 +10,7 @@ from ..data_store import load_catalog_items
 from .catalog_query import CatalogSelection, select_latest_catalog_items
 from .documents import CatalogLoader, OBJECT_TYPES
 from .language import detect_response_language, guarded_question, language_name
-from .providers import model_info, plan_with_model
+from .providers import ModelTelemetry, model_info, plan_with_model
 from .retrieval import (
     exact_series_matches,
     contains_normalized_phrase,
@@ -406,7 +406,11 @@ def _ground_model_entities(
     return plan
 
 
-def _plan_node(state: AgentState, loader: CatalogLoader) -> dict[str, Any]:
+def _plan_node(
+    state: AgentState,
+    loader: CatalogLoader,
+    telemetry: ModelTelemetry | None = None,
+) -> dict[str, Any]:
     info = model_info(state["provider"])
     if info.configured and os.getenv("KAMI_AGENT_DISABLE_LLM_PLANNER", "0") != "1":
         plan = plan_with_model(
@@ -415,6 +419,7 @@ def _plan_node(state: AgentState, loader: CatalogLoader) -> dict[str, Any]:
             state["message"],
             state.get("history", []),
             state.get("memory_state", {}),
+            telemetry,
         )
         for entity in plan.entities:
             if not entity.retrieval_query:
@@ -800,9 +805,13 @@ def run_agent(
     memory_state: dict,
     answer_callback: Callable[[str, str, str, str, str], str],
     loader: CatalogLoader = load_catalog_items,
+    telemetry: ModelTelemetry | None = None,
 ) -> dict[str, Any]:
     builder = StateGraph(AgentState)
-    builder.add_node("plan", lambda state: _plan_node(state, loader))
+    builder.add_node(
+        "plan",
+        lambda state: _plan_node(state, loader, telemetry),
+    )
     builder.add_node("refuse", _refuse_node)
     builder.add_node("clarify", _clarify_node)
     builder.add_node("retrieve", lambda state: _retrieve_node(state, loader))

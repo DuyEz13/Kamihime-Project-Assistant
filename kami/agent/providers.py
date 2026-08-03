@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import os
+import logging
+import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from .schemas import QueryPlan
+
+
+LOGGER = logging.getLogger(__name__)
+ModelTelemetry = Callable[[dict[str, Any]], None]
 
 
 @dataclass(frozen=True)
@@ -123,6 +129,80 @@ def create_chat_model(provider: str, model: str | None = None):
     raise ValueError(f"Unsupported chat provider: {selected}")
 
 
+def extract_token_usage(message: Any) -> dict[str, int | bool | None]:
+    usage = getattr(message, "usage_metadata", None)
+    if not isinstance(usage, dict):
+        response_metadata = getattr(message, "response_metadata", None)
+        response_metadata = (
+            response_metadata if isinstance(response_metadata, dict) else {}
+        )
+        usage = response_metadata.get("token_usage")
+        if not isinstance(usage, dict):
+            usage = response_metadata.get("usage")
+        if not isinstance(usage, dict):
+            usage = {}
+
+    def first_int(*names: str) -> int | None:
+        for name in names:
+            value = usage.get(name)
+            if value is not None:
+                try:
+                    return int(value)
+                except (TypeError, ValueError):
+                    continue
+        return None
+
+    input_tokens = first_int(
+        "input_tokens",
+        "prompt_tokens",
+        "prompt_token_count",
+    )
+    output_tokens = first_int(
+        "output_tokens",
+        "completion_tokens",
+        "candidates_token_count",
+    )
+    total_tokens = first_int("total_tokens", "total_token_count")
+    available = any(
+        value is not None for value in (input_tokens, output_tokens, total_tokens)
+    )
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "usage_available": available,
+    }
+
+
+def _emit_model_telemetry(
+    telemetry: ModelTelemetry | None,
+    *,
+    step: str,
+    provider: str,
+    model: str,
+    response: Any,
+    started: float,
+    error: Exception | None,
+) -> None:
+    if telemetry is None:
+        return
+    event: dict[str, Any] = {
+        "step": step,
+        "provider": provider,
+        "model": model,
+        "status": "error" if error else "ok",
+        "duration_ms": round((time.perf_counter() - started) * 1000, 3),
+        **extract_token_usage(response),
+    }
+    if error is not None:
+        event["error_type"] = type(error).__name__
+        event["error_message"] = str(error)
+    try:
+        telemetry(event)
+    except Exception as exc:
+        LOGGER.error("Could not record model telemetry: %s", exc)
+
+
 PLANNER_SYSTEM_PROMPT = """You are the query planner for KamiWiki, a local
 Kamihime Project database. Decide whether the latest user message is about
 Kamihime Project. Use conversation memory to resolve references such as 'she',
@@ -144,9 +224,10 @@ def plan_with_model(
     message: str,
     history: list[dict],
     memory_state: dict,
+    telemetry: ModelTelemetry | None = None,
 ) -> QueryPlan:
     llm = create_chat_model(provider, model)
-    structured = llm.with_structured_output(QueryPlan)
+    structured = llm.with_structured_output(QueryPlan, include_raw=True)
     recent = "\n".join(
         f"{item.get('role')}: {item.get('content')}"
         for item in history[-12:]
@@ -161,12 +242,37 @@ def plan_with_model(
         f"Long-term user preferences: {preferences}\n\n"
         f"Latest user message: {message}"
     )
-    result = structured.invoke(
-        [SystemMessage(content=PLANNER_SYSTEM_PROMPT), HumanMessage(content=prompt)]
-    )
-    if isinstance(result, QueryPlan):
-        return result
-    return QueryPlan.model_validate(result)
+    started = time.perf_counter()
+    raw = None
+    error: Exception | None = None
+    try:
+        result = structured.invoke(
+            [SystemMessage(content=PLANNER_SYSTEM_PROMPT), HumanMessage(content=prompt)]
+        )
+        if isinstance(result, dict) and "parsed" in result:
+            raw = result.get("raw")
+            parsing_error = result.get("parsing_error")
+            if parsing_error:
+                if isinstance(parsing_error, Exception):
+                    raise parsing_error
+                raise RuntimeError(str(parsing_error))
+            result = result.get("parsed")
+        if isinstance(result, QueryPlan):
+            return result
+        return QueryPlan.model_validate(result)
+    except Exception as exc:
+        error = exc
+        raise
+    finally:
+        _emit_model_telemetry(
+            telemetry,
+            step="planner",
+            provider=provider,
+            model=model,
+            response=raw,
+            started=started,
+            error=error,
+        )
 
 
 ANSWER_SYSTEM_PROMPT = """You are KamiWiki Assistant. Answer only questions
@@ -200,6 +306,8 @@ def answer_with_model(
     history: list[dict],
     question: str,
     context: str,
+    telemetry: ModelTelemetry | None = None,
+    step: str = "answer",
 ) -> str:
     llm = create_chat_model(provider, model)
     messages: list[Any] = [SystemMessage(content=ANSWER_SYSTEM_PROMPT)]
@@ -223,7 +331,24 @@ def answer_with_model(
             )
         )
     )
-    response = llm.invoke(messages)
+    started = time.perf_counter()
+    response = None
+    error: Exception | None = None
+    try:
+        response = llm.invoke(messages)
+    except Exception as exc:
+        error = exc
+        raise
+    finally:
+        _emit_model_telemetry(
+            telemetry,
+            step=step,
+            provider=provider,
+            model=model,
+            response=response,
+            started=started,
+            error=error,
+        )
     content = response.content
     if isinstance(content, str):
         return content.strip()
