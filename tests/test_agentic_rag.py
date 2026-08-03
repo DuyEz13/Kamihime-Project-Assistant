@@ -5,7 +5,7 @@ import torch
 
 from kami.agent import memory
 from kami.agent.documents import object_documents
-from kami.agent.graph import deterministic_plan, run_agent
+from kami.agent.graph import _ground_query_constraints, deterministic_plan, run_agent
 from kami.agent.language import detect_response_language
 from kami.agent.providers import available_models
 from kami.agent.retrieval import (
@@ -22,6 +22,66 @@ from kami.series import (
     reconcile_series_data,
     series_metadata,
 )
+
+
+def test_vietnamese_latest_query_has_exact_catalog_constraints():
+    plan = deterministic_plan(
+        "t\u00ecm th\u00f4ng tin v\u1ec1 kamihime m\u1edbi nh\u1ea5t h\u1ec7 n\u01b0\u1edbc",
+        {},
+        lambda _object_type: [],
+    )
+
+    assert plan.in_domain is True
+    assert plan.intent == "filter"
+    assert plan.target_types == ["kamihime"]
+    assert plan.elements == ["water"]
+    assert plan.sort_by == "release_date"
+    assert plan.sort_order == "desc"
+    assert plan.result_limit == 1
+    assert plan.include_ties is True
+
+
+@pytest.mark.parametrize("phrase", ["latest", "newest", "most recent"])
+def test_english_latest_phrases_are_grounded(phrase):
+    plan = deterministic_plan(
+        f"Find the {phrase} Water Eidolon",
+        {},
+        lambda _object_type: [],
+    )
+
+    assert plan.target_types == ["eidolon"]
+    assert plan.elements == ["water"]
+    assert plan.sort_by == "release_date"
+    assert plan.include_ties is True
+
+
+def test_grounding_corrects_model_plan_that_dropped_latest_and_element():
+    model_plan = QueryPlan(
+        in_domain=True,
+        standalone_question="Find Water Kamihime",
+        target_types=["kamihime"],
+    )
+
+    grounded = _ground_query_constraints(
+        model_plan,
+        "t\u00ecm th\u00f4ng tin v\u1ec1 kamihime m\u1edbi nh\u1ea5t h\u1ec7 n\u01b0\u1edbc",
+    )
+
+    assert grounded.elements == ["water"]
+    assert grounded.sort_by == "release_date"
+    assert grounded.result_limit == 1
+    assert grounded.include_ties is True
+
+
+def test_latest_query_without_object_type_requests_clarification():
+    plan = deterministic_plan(
+        "d\u1eef li\u1ec7u h\u1ec7 n\u01b0\u1edbc m\u1edbi nh\u1ea5t",
+        {},
+        lambda _object_type: [],
+    )
+
+    assert plan.needs_clarification is True
+    assert plan.clarification_question
 
 
 def _item(name: str, slug: str, element: str = "fire", object_type: str = "kamihime"):

@@ -41,6 +41,10 @@ class QueryPlan(BaseModel):
     target_types: list[ObjectType] = Field(default_factory=list)
     entities: list[EntityQuery] = Field(default_factory=list)
     elements: list[str] = Field(default_factory=list)
+    sort_by: Literal["relevance", "release_date"] = "relevance"
+    sort_order: Literal["asc", "desc"] = "desc"
+    result_limit: int | None = Field(default=None, ge=1, le=100)
+    include_ties: bool = False
     needs_clarification: bool = False
     clarification_question: str | None = None
 

@@ -85,6 +85,56 @@ def _target_types(message: str) -> list[str]:
     return list(dict.fromkeys(values))
 
 
+ELEMENT_ALIASES = {
+    "fire": ("fire", "he lua"),
+    "water": ("water", "he nuoc"),
+    "wind": ("wind", "he gio"),
+    "thunder": ("thunder", "lightning", "he set"),
+    "light": ("light", "he anh sang"),
+    "dark": ("dark", "he bong toi"),
+    "phantom": ("phantom", "he ao"),
+}
+LATEST_PHRASES = ("moi nhat", "latest", "newest", "most recent")
+
+
+def _deterministic_elements(message: str) -> list[str]:
+    normalized = normalize_text(message)
+    return [
+        element
+        for element, aliases in ELEMENT_ALIASES.items()
+        if any(contains_normalized_phrase(normalized, alias) for alias in aliases)
+    ]
+
+
+def _latest_requested(message: str) -> bool:
+    normalized = normalize_text(message)
+    return any(
+        contains_normalized_phrase(normalized, phrase)
+        for phrase in LATEST_PHRASES
+    )
+
+
+def _ground_query_constraints(plan: QueryPlan, message: str) -> QueryPlan:
+    detected_types = _target_types(message)
+    detected_elements = _deterministic_elements(message)
+    if detected_types:
+        plan.target_types = detected_types
+    if detected_elements:
+        plan.elements = detected_elements
+    if _latest_requested(message):
+        plan.intent = "filter"
+        plan.sort_by = "release_date"
+        plan.sort_order = "desc"
+        plan.result_limit = 1
+        plan.include_ties = True
+        if not plan.target_types:
+            plan.needs_clarification = True
+            plan.clarification_question = (
+                "Please specify Kamihime, Eidolon, or Weapon."
+            )
+    return plan
+
+
 def _deterministic_entities(
     message: str,
     target_types: list[str],
@@ -221,13 +271,14 @@ def deterministic_plan(
     ):
         standalone = f"{message} Context entities: {', '.join(focus_names)}"
     intent = "compare" if any(word in normalized for word in ("compare", "versus", " vs ", "so sanh")) else "lookup"
-    return QueryPlan(
+    plan = QueryPlan(
         in_domain=domain,
         standalone_question=standalone,
         intent=intent,
         target_types=target_types,
         entities=entities,
     )
+    return _ground_query_constraints(plan, message)
 
 
 def _explicit_object_matches(
@@ -342,6 +393,7 @@ def _plan_node(state: AgentState, loader: CatalogLoader) -> dict[str, Any]:
                     f"{entity.name or entity.mention}: {plan.standalone_question}"
                 )
         plan = _ground_model_entities(plan, state["message"], loader)
+        plan = _ground_query_constraints(plan, state["message"])
     else:
         plan = deterministic_plan(
             state["message"],

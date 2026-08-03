@@ -133,7 +133,9 @@ eidolon, or weapon. Rewrite each retrieval_query and standalone_question in
 concise English. Treat a named series as one entity whose name is the series
 name, not as separate entities for the members visible in the question. Do not
 answer the question. General knowledge unrelated to Kamihime Project is out of
-domain."""
+domain. For latest, newest, most recent, or equivalent Vietnamese requests, set
+sort_by=release_date, sort_order=desc, result_limit=1, and include_ties=true.
+Extract the requested element even when no named entity is present."""
 
 
 def plan_with_model(
