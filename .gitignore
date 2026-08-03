@@ -26,6 +26,7 @@ vectorstore/
 kami/data/.translation_cache.json
 kami/data/chat_sessions.json
 kami/data/chat_memory.sqlite3*
+kami/data/chat_traces.jsonl*
 kami/data/rag_index/
 
 # OS files

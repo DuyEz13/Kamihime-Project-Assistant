@@ -98,7 +98,13 @@ GEMINI_CHAT_MODEL=gemini-2.5-flash
 
 DEEPSEEK_API_KEY=your_deepseek_api_key
 DEEPSEEK_CHAT_MODEL=deepseek-chat
+
+KAMI_CHAT_TRACE_ENABLED=1
+KAMI_CHAT_TRACE_PATH=kami/data/chat_traces.jsonl
+KAMI_CHAT_TRACE_INCLUDE_CONTENT=0
 ```
+
+The local trace file records graph, retrieval, model and token diagnostics; raw prompts, retrieved content and answers are included only when `KAMI_CHAT_TRACE_INCLUDE_CONTENT=1`.
 
 Install the RAG dependencies and build the local index:
 
