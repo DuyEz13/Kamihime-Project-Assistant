@@ -16,6 +16,7 @@ from kami.agent.retrieval import (
     retrieve_entity,
 )
 from kami.agent.schemas import EntityQuery, QueryPlan
+from kami.agent.section_scope import detect_requested_sections
 from kami.series import (
     detect_series_candidates,
     enrich_info_series,
@@ -39,6 +40,50 @@ def test_vietnamese_latest_query_has_exact_catalog_constraints():
     assert plan.sort_order == "desc"
     assert plan.result_limit == 1
     assert plan.include_ties is True
+
+
+@pytest.mark.parametrize(
+    ("message", "object_type"),
+    [
+        ("tìm thông tin về eidolon mới nhất hệ nước", "eidolon"),
+        ("Find information about the newest water element eidolon", "eidolon"),
+        ("latest dark kamihime", "kamihime"),
+        ("newest water sword weapon", "weapon"),
+    ],
+)
+def test_generic_and_filter_words_do_not_select_sections(message, object_type):
+    assert detect_requested_sections(message, [object_type]) == {}
+
+
+@pytest.mark.parametrize(
+    ("message", "object_type", "expected"),
+    [
+        ("cho tôi stats và summon effect", "eidolon", ["stats", "summon_effect"]),
+        ("main effect và sub effect", "eidolon", ["main_effect", "sub_effect"]),
+        ("show burst and assist", "kamihime", ["burst", "assist"]),
+        ("cho tôi ability", "kamihime", ["ability"]),
+        ("weapon skills", "weapon", ["weapon_skills"]),
+        ("burst effects", "weapon", ["burst_effects"]),
+    ],
+)
+def test_explicit_section_names_are_grounded(message, object_type, expected):
+    assert detect_requested_sections(message, [object_type]) == {
+        object_type: expected
+    }
+
+
+@pytest.mark.parametrize(
+    ("message", "object_type"),
+    [
+        ("eidolon này thuộc hệ nào", "eidolon"),
+        ("show the weapon acquisition method", "weapon"),
+        ("ngày phát hành kamihime này", "kamihime"),
+    ],
+)
+def test_unambiguous_basic_fields_select_basic(message, object_type):
+    assert detect_requested_sections(message, [object_type]) == {
+        object_type: ["basic"]
+    }
 
 
 @pytest.mark.parametrize("phrase", ["latest", "newest", "most recent"])

@@ -20,6 +20,7 @@ from .retrieval import (
     series_alias_score,
 )
 from .schemas import AgentState, EntityQuery, QueryPlan
+from .section_scope import detect_requested_sections
 
 
 DOMAIN_WORDS = {
@@ -138,6 +139,10 @@ def _ground_query_constraints(plan: QueryPlan, message: str) -> QueryPlan:
         else:
             plan.needs_clarification = False
             plan.clarification_question = None
+    plan.requested_sections = detect_requested_sections(
+        message,
+        plan.target_types or detected_types,
+    )
     return plan
 
 

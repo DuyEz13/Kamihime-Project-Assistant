@@ -45,6 +45,7 @@ class QueryPlan(BaseModel):
     sort_order: Literal["asc", "desc"] = "desc"
     result_limit: int | None = Field(default=None, ge=1, le=100)
     include_ties: bool = False
+    requested_sections: dict[str, list[str]] = Field(default_factory=dict)
     needs_clarification: bool = False
     clarification_question: str | None = None
 
