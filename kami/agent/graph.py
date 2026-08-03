@@ -21,6 +21,7 @@ from .retrieval import (
 )
 from .schemas import AgentState, EntityQuery, QueryPlan
 from .section_scope import detect_requested_sections
+from .tracing import ChatTrace, NullChatTrace
 
 
 DOMAIN_WORDS = {
@@ -765,7 +766,9 @@ def _answer_node(
         question,
         state.get("context", ""),
     )
+    retry_count = 0
     if detect_response_language(answer, language) != language:
+        retry_count = 1
         selected = language_name(language)
         answer = answer_callback(
             state["provider"],
@@ -778,7 +781,11 @@ def _answer_node(
             ),
             state.get("context", ""),
         )
-    return {"answer": answer}
+    return {
+        "answer": answer,
+        "language_retry_count": retry_count,
+        "response_language": detect_response_language(answer, language),
+    }
 
 
 def _after_retrieve(state: AgentState) -> str:
@@ -806,20 +813,54 @@ def run_agent(
     answer_callback: Callable[[str, str, str, str, str], str],
     loader: CatalogLoader = load_catalog_items,
     telemetry: ModelTelemetry | None = None,
+    trace: ChatTrace | NullChatTrace | None = None,
 ) -> dict[str, Any]:
+    model_telemetry = telemetry or (
+        trace.record_model_call if trace is not None else None
+    )
+
+    def traced_node(
+        name: str,
+        callback: Callable[[AgentState], dict[str, Any]],
+    ) -> Callable[[AgentState], dict[str, Any]]:
+        def invoke(state: AgentState) -> dict[str, Any]:
+            if trace is None:
+                return callback(state)
+            with trace.node(name):
+                output = callback(state)
+            if name == "plan" and output.get("plan") is not None:
+                trace.record_plan(output["plan"])
+            elif name == "retrieve":
+                trace.record_retrieval(
+                    output.get("retrieval_diagnostics", {}),
+                    output.get("evidence", []),
+                )
+            return output
+
+        return invoke
+
     builder = StateGraph(AgentState)
     builder.add_node(
         "plan",
-        lambda state: _plan_node(state, loader, telemetry),
+        traced_node(
+            "plan",
+            lambda state: _plan_node(state, loader, model_telemetry),
+        ),
     )
-    builder.add_node("refuse", _refuse_node)
-    builder.add_node("clarify", _clarify_node)
-    builder.add_node("retrieve", lambda state: _retrieve_node(state, loader))
+    builder.add_node("refuse", traced_node("refuse", _refuse_node))
+    builder.add_node("clarify", traced_node("clarify", _clarify_node))
+    builder.add_node(
+        "retrieve",
+        traced_node("retrieve", lambda state: _retrieve_node(state, loader)),
+    )
     builder.add_node(
         "answer",
-        lambda state: _answer_node(state, answer_callback),
+        traced_node(
+            "answer",
+            lambda state: _answer_node(state, answer_callback),
+        ),
     )
-    builder.add_node("missing", _missing_node)
+    builder.add_node("missing", traced_node("missing", _missing_node))
     builder.add_edge(START, "plan")
     builder.add_conditional_edges(
         "plan",

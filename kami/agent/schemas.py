@@ -96,4 +96,6 @@ class AgentState(TypedDict, total=False):
     context: str
     retrieval_issue: str
     retrieval_diagnostics: dict[str, Any]
+    language_retry_count: int
+    response_language: str
     answer: str

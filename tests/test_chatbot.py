@@ -1,6 +1,8 @@
 import json
 
 import httpx
+import pytest
+from langchain_core.messages import AIMessage
 
 from kami import chatbot
 
@@ -92,7 +94,7 @@ def test_domain_question_calls_model_and_persists_memory(tmp_path, monkeypatch):
 
     calls = []
 
-    def fake_model(provider, model, session_id, message, context):
+    def fake_model(provider, model, session_id, message, context, **_kwargs):
         calls.append((provider, model, session_id, message, context))
         return "Nike is a Water healer. Healing Stream restores HP to all allies."
 
@@ -121,7 +123,7 @@ def test_vietnamese_question_persists_language_and_guards_model_prompt(
     monkeypatch.setenv("KAMI_AGENT_DISABLE_LLM_PLANNER", "1")
     calls = []
 
-    def fake_model(_provider, _model, _session_id, message, _context):
+    def fake_model(_provider, _model, _session_id, message, _context, **_kwargs):
         calls.append(message)
         return "Nike là Kamihime hệ Thủy."
 
@@ -144,7 +146,11 @@ def test_delete_session_removes_history(tmp_path, monkeypatch):
     memory_path = tmp_path / "chat_sessions.json"
     monkeypatch.setattr(chatbot, "CHAT_MEMORY_PATH", memory_path)
     monkeypatch.setattr(chatbot, "load_characters", _characters)
-    monkeypatch.setattr(chatbot, "_call_model", lambda *_args: "Answer.")
+    monkeypatch.setattr(
+        chatbot,
+        "_call_model",
+        lambda *_args, **_kwargs: "Answer.",
+    )
 
     response = chatbot.answer_chat("Tell me about Nike", provider="gpt")
 
@@ -160,7 +166,7 @@ def test_followup_question_uses_session_memory_for_rag(tmp_path, monkeypatch):
 
     contexts = []
 
-    def fake_model(_provider, _model, _session_id, _message, context):
+    def fake_model(_provider, _model, _session_id, _message, context, **_kwargs):
         contexts.append(context)
         return "Answer from retrieved context."
 
@@ -183,7 +189,7 @@ def test_followup_prioritizes_previous_answer_sources_over_generic_terms(tmp_pat
 
     contexts = []
 
-    def fake_model(_provider, _model, _session_id, _message, context):
+    def fake_model(_provider, _model, _session_id, _message, context, **_kwargs):
         contexts.append(context)
         return "Answer from retrieved context."
 
@@ -242,3 +248,113 @@ def test_chat_provider_reports_transient_error_after_retries(monkeypatch):
 
     assert "temporarily unavailable (503)" in message
     assert "high demand" in message
+
+
+def test_answer_chat_writes_graph_and_retrieval_trace(tmp_path, monkeypatch):
+    memory_path = tmp_path / "chat_sessions.json"
+    trace_path = tmp_path / "chat_traces.jsonl"
+    monkeypatch.setattr(chatbot, "CHAT_MEMORY_PATH", memory_path)
+    monkeypatch.setattr(chatbot, "load_characters", _characters)
+    monkeypatch.setenv("KAMI_AGENT_DISABLE_LLM_PLANNER", "1")
+    monkeypatch.setenv("KAMI_CHAT_TRACE_ENABLED", "1")
+    monkeypatch.setenv("KAMI_CHAT_TRACE_PATH", str(trace_path))
+    monkeypatch.setattr(
+        chatbot,
+        "_call_model",
+        lambda *_args, **_kwargs: "Nike is a Water healer.",
+    )
+
+    response = chatbot.answer_chat("Tell me about Nike", provider="gpt")
+
+    record = json.loads(trace_path.read_text(encoding="utf-8").splitlines()[0])
+    assert response["trace_id"] == record["trace_id"]
+    assert record["status"] == "ok"
+    assert record["plan"]["target_types"] == ["kamihime"]
+    assert record["retrieval"]["reason_code"] == "selected_relevant_records"
+    assert record["retrieval"]["evidence"][0]["name"] == "Nike"
+    assert [node["name"] for node in record["graph"]["nodes"]] == [
+        "plan",
+        "retrieve",
+        "answer",
+    ]
+
+
+def test_answer_chat_traces_language_retry_as_second_model_call(
+    tmp_path,
+    monkeypatch,
+):
+    trace_path = tmp_path / "chat_traces.jsonl"
+    monkeypatch.setattr(chatbot, "CHAT_MEMORY_PATH", tmp_path / "sessions.json")
+    monkeypatch.setattr(chatbot, "load_characters", _characters)
+    monkeypatch.setenv("KAMI_AGENT_DISABLE_LLM_PLANNER", "1")
+    monkeypatch.setenv("KAMI_CHAT_TRACE_ENABLED", "1")
+    monkeypatch.setenv("KAMI_CHAT_TRACE_PATH", str(trace_path))
+    responses = [
+        AIMessage(
+            content="There are six members in this series.",
+            usage_metadata={
+                "input_tokens": 20,
+                "output_tokens": 5,
+                "total_tokens": 25,
+            },
+        ),
+        AIMessage(
+            content="Nike là Kamihime hệ Thủy.",
+            usage_metadata={
+                "input_tokens": 30,
+                "output_tokens": 7,
+                "total_tokens": 37,
+            },
+        ),
+    ]
+
+    class FakeModel:
+        def invoke(self, _messages):
+            return responses.pop(0)
+
+    monkeypatch.setattr(
+        "kami.agent.providers.create_chat_model",
+        lambda *_args, **_kwargs: FakeModel(),
+    )
+
+    chatbot.answer_chat(
+        "Hãy cho tôi biết thông tin về Kamihime Nike",
+        provider="gpt",
+    )
+
+    record = json.loads(trace_path.read_text(encoding="utf-8").splitlines()[0])
+    assert [call["step"] for call in record["model_calls"]] == [
+        "answer",
+        "answer_language_retry",
+    ]
+    assert record["totals"]["reported_total_tokens"] == 62
+    assert record["response"]["required_language"] == "vi"
+    assert record["response"]["actual_language"] == "vi"
+    assert record["response"]["language_retry_count"] == 1
+
+
+def test_answer_chat_finalizes_trace_when_model_fails(tmp_path, monkeypatch):
+    trace_path = tmp_path / "chat_traces.jsonl"
+    monkeypatch.setenv("KAMI_CHAT_TRACE_ENABLED", "1")
+    monkeypatch.setenv("KAMI_CHAT_TRACE_PATH", str(trace_path))
+    monkeypatch.setenv("KAMI_AGENT_DISABLE_LLM_PLANNER", "1")
+    monkeypatch.setattr(chatbot, "CHAT_MEMORY_PATH", tmp_path / "sessions.json")
+    monkeypatch.setattr(chatbot, "load_characters", _characters)
+
+    def fail_model(*_args, **_kwargs):
+        raise RuntimeError("provider failed")
+
+    monkeypatch.setattr(chatbot, "_call_model", fail_model)
+
+    with pytest.raises(RuntimeError, match="provider failed"):
+        chatbot.answer_chat("Tell me about Nike", provider="gpt")
+
+    record = json.loads(trace_path.read_text(encoding="utf-8").splitlines()[0])
+    assert record["status"] == "error"
+    assert record["error"]["type"] == "RuntimeError"
+    assert [node["name"] for node in record["graph"]["nodes"]] == [
+        "plan",
+        "retrieve",
+        "answer",
+    ]
+    assert record["graph"]["nodes"][-1]["status"] == "error"

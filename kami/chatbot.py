@@ -21,11 +21,13 @@ from .agent import memory as agent_memory
 from .agent.graph import run_agent
 from .agent.language import detect_response_language
 from .agent.providers import (
+    ModelTelemetry,
     answer_with_model,
     available_models,
     model_info,
     normalize_provider,
 )
+from .agent.tracing import create_chat_trace
 
 
 CHAT_MEMORY_PATH = DATA_DIR / "chat_sessions.json"
@@ -577,13 +579,23 @@ def _gemini_answer(
     return "".join(str(part.get("text", "")) for part in parts).strip()
 
 
-def _call_model(provider: str, model: str, session_id: str, message: str, context: str) -> str:
+def _call_model(
+    provider: str,
+    model: str,
+    session_id: str,
+    message: str,
+    context: str,
+    telemetry: ModelTelemetry | None = None,
+    step: str = "answer",
+) -> str:
     return answer_with_model(
         provider,
         model,
         _memory_for_prompt(session_id),
         message,
         context,
+        telemetry=telemetry,
+        step=step,
     )
 
 
@@ -639,93 +651,143 @@ def answer_chat(
             return load_characters()
         return load_catalog_items(object_type)
 
-    try:
-        result = run_agent(
-            session_id=current_session_id,
-            client_id=current_client_id,
-            provider=selected_provider,
-            model=selected_model,
-            message=clean_message,
-            history=history,
-            memory_state=memory_state,
-            answer_callback=_call_model,
-            loader=catalog_loader,
-        )
-    except Exception as exc:
-        if isinstance(exc, (httpx.HTTPStatusError, httpx.RequestError)):
-            detail = _provider_error_message(exc)
-        else:
-            detail = str(exc).strip() or type(exc).__name__
-        raise RuntimeError(detail) from exc
-
-    answer = str(result.get("answer") or "")
-    source_payload = list(result.get("sources") or [])
-    updated_state = dict(memory_state)
-    language = detect_response_language(
-        clean_message,
-        str((memory_state.get("long_term") or {}).get("language") or "en"),
-    )
-    full_history = _session_messages(current_session_id)
-    context_limit = max(2, int(os.getenv("KAMI_CHAT_CONTEXT_MESSAGES", "16")))
-    summary = str(memory_state.get("summary") or "")
-    if len(full_history) >= context_limit:
-        older = full_history[:-8]
-        excerpt = "\n".join(
-            f"{item.get('role')}: {item.get('content')}"
-            for item in older
-        )
-        summary = (summary + "\n" + excerpt).strip()[-6000:]
-    updated_state.update(
-        {
-            "focus_entities": [
-                {
-                    "name": source.get("name"),
-                    "object_type": source.get("object_type"),
-                    "slug": source.get("slug"),
-                    "element": source.get("element"),
-                    "series_key": source.get("series_key"),
-                    "series_name": source.get("series_name"),
-                }
-                for source in source_payload
-            ],
-            "last_intent": getattr(result.get("plan"), "intent", "lookup"),
-            "last_standalone_question": getattr(
-                result.get("plan"),
-                "standalone_question",
-                clean_message,
-            ),
-            "summary": summary,
-            "long_term": {
-                "language": language,
-                "last_provider": selected_provider,
-            },
-        }
-    )
-    user_message = {
-        "role": "user",
-        "content": clean_message,
-        "created_at": _now_iso(),
-    }
-    assistant_message = {
-        "role": "assistant",
-        "content": answer,
-        "created_at": _now_iso(),
-        "provider": selected_provider,
-        "model": selected_model,
-        "sources": source_payload,
-    }
-    agent_memory.append_exchange(
-        CHAT_MEMORY_PATH,
+    trace = create_chat_trace(
         current_session_id,
         current_client_id,
-        user_message,
-        assistant_message,
-        updated_state,
+        selected_provider,
+        selected_model,
     )
-    return {
-        "session_id": current_session_id,
-        "answer": answer,
-        "provider": selected_provider,
-        "model": selected_model,
-        "sources": source_payload,
-    }
+    trace.record_request(clean_message)
+    answer_call_count = 0
+
+    def traced_model_call(
+        call_provider: str,
+        call_model: str,
+        call_session_id: str,
+        call_message: str,
+        call_context: str,
+    ) -> str:
+        nonlocal answer_call_count
+        step = "answer" if answer_call_count == 0 else "answer_language_retry"
+        answer_call_count += 1
+        return _call_model(
+            call_provider,
+            call_model,
+            call_session_id,
+            call_message,
+            call_context,
+            telemetry=trace.record_model_call,
+            step=step,
+        )
+
+    try:
+        try:
+            result = run_agent(
+                session_id=current_session_id,
+                client_id=current_client_id,
+                provider=selected_provider,
+                model=selected_model,
+                message=clean_message,
+                history=history,
+                memory_state=memory_state,
+                answer_callback=traced_model_call,
+                loader=catalog_loader,
+                trace=trace,
+            )
+        except Exception as exc:
+            if isinstance(exc, (httpx.HTTPStatusError, httpx.RequestError)):
+                detail = _provider_error_message(exc)
+            else:
+                detail = str(exc).strip() or type(exc).__name__
+            raise RuntimeError(detail) from exc
+
+        answer = str(result.get("answer") or "")
+        source_payload = list(result.get("sources") or [])
+        updated_state = dict(memory_state)
+        language = detect_response_language(
+            clean_message,
+            str((memory_state.get("long_term") or {}).get("language") or "en"),
+        )
+        response_language = str(
+            result.get("response_language")
+            or detect_response_language(answer, language)
+        )
+        retry_count = int(result.get("language_retry_count") or 0)
+        trace.record_response(
+            language,
+            response_language,
+            answer,
+            retry_count,
+        )
+
+        full_history = _session_messages(current_session_id)
+        context_limit = max(2, int(os.getenv("KAMI_CHAT_CONTEXT_MESSAGES", "16")))
+        summary = str(memory_state.get("summary") or "")
+        if len(full_history) >= context_limit:
+            older = full_history[:-8]
+            excerpt = "\n".join(
+                f"{item.get('role')}: {item.get('content')}"
+                for item in older
+            )
+            summary = (summary + "\n" + excerpt).strip()[-6000:]
+        updated_state.update(
+            {
+                "focus_entities": [
+                    {
+                        "name": source.get("name"),
+                        "object_type": source.get("object_type"),
+                        "slug": source.get("slug"),
+                        "element": source.get("element"),
+                        "series_key": source.get("series_key"),
+                        "series_name": source.get("series_name"),
+                    }
+                    for source in source_payload
+                ],
+                "last_intent": getattr(result.get("plan"), "intent", "lookup"),
+                "last_standalone_question": getattr(
+                    result.get("plan"),
+                    "standalone_question",
+                    clean_message,
+                ),
+                "summary": summary,
+                "long_term": {
+                    "language": language,
+                    "last_provider": selected_provider,
+                },
+            }
+        )
+        user_message = {
+            "role": "user",
+            "content": clean_message,
+            "created_at": _now_iso(),
+        }
+        assistant_message = {
+            "role": "assistant",
+            "content": answer,
+            "created_at": _now_iso(),
+            "provider": selected_provider,
+            "model": selected_model,
+            "sources": source_payload,
+            "trace_id": trace.trace_id,
+        }
+        agent_memory.append_exchange(
+            CHAT_MEMORY_PATH,
+            current_session_id,
+            current_client_id,
+            user_message,
+            assistant_message,
+            updated_state,
+        )
+        return {
+            "session_id": current_session_id,
+            "answer": answer,
+            "provider": selected_provider,
+            "model": selected_model,
+            "sources": source_payload,
+            "trace_id": trace.trace_id,
+        }
+    except Exception as exc:
+        trace.record_error(exc)
+        raise
+    finally:
+        trace.finalize()
