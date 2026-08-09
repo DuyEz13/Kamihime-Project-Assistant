@@ -83,7 +83,7 @@ GOOGLE_TRANSLATE_BATCH_SIZE=50
 
 Add or correct game terminology in `kami/translation_glossary.json`. Before translation, KamiWiki creates or reuses the stable glossary named by `DEEPL_GLOSSARY_NAME` and synchronizes its complete JA-EN dictionary with this file. Legacy hash-named KamiWiki glossaries are renamed automatically during the first synchronization. To manage a specific existing multilingual glossary instead, set `DEEPL_GLOSSARY_ID`; its JA-EN dictionary will be synchronized too. Set `DEEPL_REQUIRE_GLOSSARY=0` only when testing without terminology enforcement.
 
-## Asisstant Chatbot
+## Assistant Chatbot
 
 Configure at least one chat provider in `.env`:
 
@@ -190,7 +190,6 @@ KamiWiki/
 |   |-- build_rag_index.py      # Build the unified Qdrant hybrid index
 |   |-- crawl_data.py           # Crawl raw data by object type and element
 |   `-- test_translation.py     # Test a few translations without rebuilding data
-|-- test.ipynb                  # Experimental crawler and data inspection notebook
 |-- .env.example                # Example environment variables
 |-- .python-version             # Python version selected by uv
 |-- pyproject.toml              # Project metadata and dependency definitions
