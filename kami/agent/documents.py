@@ -144,7 +144,7 @@ def object_documents(item: dict[str, Any]) -> list[Document]:
                 continue
             section_type = str(section.get("type") or "skill")
             for row in section.get("rows") or []:
-                if isinstance(row, dict):
+                if isinstance(row, dict) and not row.get("is_note"):
                     grouped.setdefault(section_type, []).append(row)
         for section_type, rows in grouped.items():
             _append_section(docs, item, section_type, rows)

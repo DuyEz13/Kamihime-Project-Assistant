@@ -923,6 +923,34 @@ button { cursor: pointer; }
 .skill-table tbody tr:not(.skill-section-heading):hover td {
   background: #fbfcfd;
 }
+.skill-table .skill-note-row td {
+  padding: 0;
+  background: #f7f9fb;
+}
+.skill-note {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.8rem 1rem;
+  color: #3f4752;
+  text-align: left;
+}
+.skill-note img {
+  flex: 0 0 auto;
+  width: 56px;
+  height: 56px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+.skill-note blockquote {
+  min-width: 0;
+  max-width: 72ch;
+  margin: 0;
+  font-style: italic;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+}
 .skill-table .skill-section-heading th {
   position: sticky;
   top: 0;

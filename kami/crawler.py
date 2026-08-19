@@ -4,6 +4,7 @@ from email.utils import parsedate_to_datetime
 import json
 import os
 import random
+import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -57,6 +58,52 @@ UNLOCK_LINK_FIELDS = {
     "解放武器": "unlock_weapon_url",
     "解放神姫": "unlock_kamihime_url",
 }
+
+WEAPON_SKILL_NAME_CORRECTIONS = {
+    "/kamiprodb/双刀・摩武駄致": {
+        "キュートスアサルト": "コキュートスアサルト",
+    },
+}
+EIDOLON_EFFECT_TYPE_CORRECTIONS = {
+    "/kamiprodb/PB05TD_イーリア": {
+        "変異の殺戮剣": "サブ効果",
+    },
+}
+
+
+def _source_path(page_url: str) -> str:
+    return unquote(urlsplit(page_url).path).rstrip("/")
+
+
+def _looks_like_weapon_stat_row(first: str, values: list[str]) -> bool:
+    if len(values) != 3:
+        return False
+    limit_break = first.replace(" ", "")
+    if not re.fullmatch(r"(?:[～〜~]\d+|\d+(?:[～〜~]\d+)?)", limit_break):
+        return False
+    if not re.fullmatch(r"\d+", values[0].replace(",", "")):
+        return False
+    return all(
+        re.fullmatch(r"[\d,]+(?:[～〜~][\d,]+)?", value.replace(" ", ""))
+        for value in values[1:]
+    )
+
+
+def _correct_weapon_source_data(result: dict, page_url: str) -> None:
+    corrections = WEAPON_SKILL_NAME_CORRECTIONS.get(_source_path(page_url), {})
+    for skill in result["weapon_skills"]:
+        name = str(skill.get("name") or "")
+        for wrong, corrected in corrections.items():
+            name = name.replace(wrong, corrected)
+        skill["name"] = name
+
+
+def _correct_eidolon_source_data(result: dict, page_url: str) -> None:
+    corrections = EIDOLON_EFFECT_TYPE_CORRECTIONS.get(_source_path(page_url), {})
+    for effect in result["eidolon_effects"]:
+        corrected_type = corrections.get(str(effect.get("name") or ""))
+        if corrected_type:
+            effect["type"] = corrected_type
 
 
 def _env_int(name: str, default: int, minimum: int = 0) -> int:
@@ -714,6 +761,16 @@ class WeaponCrawler(CatalogCrawler):
                 )
                 continue
 
+            if phase == "basic" and ths and tds:
+                values = [cell.get_text(" ", strip=True) for cell in tds]
+                if _looks_like_weapon_stat_row(first, values):
+                    stat_headers = ["最大Lv", "HP", "攻撃力"]
+                    phase = "stats"
+                    stat = {"limit_break": first}
+                    stat.update(dict(zip(stat_headers, values)))
+                    result["stats"].append(stat)
+                    continue
+
             if len(cells) == 1 and cells[0].name == "td":
                 result["flavor"] = cells[0].get_text(
                     separator="\n",
@@ -755,6 +812,7 @@ class WeaponCrawler(CatalogCrawler):
                     }
                 )
 
+        _correct_weapon_source_data(result, page_url)
         return result
 
 
@@ -882,6 +940,7 @@ class EidolonCrawler(CatalogCrawler):
                     }
                 )
 
+        _correct_eidolon_source_data(result, page_url)
         return result
 
 

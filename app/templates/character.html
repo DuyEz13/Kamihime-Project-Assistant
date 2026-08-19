@@ -87,7 +87,26 @@
                 <th>Duration</th>
                 <th>Effect</th>
               </tr>
+              {% else %}
+              <tr class="skill-section-heading">
+                <th {% if character.has_skill_icons %}colspan="2"{% endif %}>{{ section.type }}</th>
+                <th colspan="3">Acquisition</th>
+                <th>Effect</th>
+              </tr>
+              {% endif %}
               {% for skill in section.rows %}
+              {% if skill.is_note %}
+              <tr class="skill-note-row">
+                <td colspan="{% if character.has_skill_icons %}6{% else %}5{% endif %}">
+                  <div class="skill-note">
+                    {% if skill.image %}
+                    <img src="{{ skill.image }}" alt="" loading="lazy">
+                    {% endif %}
+                    <blockquote>{{ skill.note }}</blockquote>
+                  </div>
+                </td>
+              </tr>
+              {% elif section.type == "Ability" %}
               <tr>
                 {% if character.has_skill_icons %}
                 <td class="skill-icon-cell">
@@ -100,14 +119,7 @@
                 <td class="skill-meta">{{ skill.duration }}</td>
                 <td class="skill-effect">{{ skill.effect }}</td>
               </tr>
-              {% endfor %}
               {% else %}
-              <tr class="skill-section-heading">
-                <th {% if character.has_skill_icons %}colspan="2"{% endif %}>{{ section.type }}</th>
-                <th colspan="3">Acquisition</th>
-                <th>Effect</th>
-              </tr>
-              {% for skill in section.rows %}
               <tr>
                 {% if character.has_skill_icons %}
                 <td class="skill-icon-cell">
@@ -118,8 +130,8 @@
                 <td class="skill-meta" colspan="3">{{ skill.requirements }}</td>
                 <td class="skill-effect">{{ skill.effect }}</td>
               </tr>
-              {% endfor %}
               {% endif %}
+              {% endfor %}
             {% endfor %}
           </tbody>
         </table>

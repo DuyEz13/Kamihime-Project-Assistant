@@ -220,6 +220,22 @@ def _skill_type_and_name(skill: dict[str, Any]) -> tuple[str, str]:
     return "Skill", "-"
 
 
+def _skill_type(skill: dict[str, Any]) -> str:
+    type_patterns = {
+        "Burst": ("burst", "バースト"),
+        "Ability": ("ability", "アビリティ"),
+        "Assist": ("assist", "アシスト"),
+    }
+    for key in skill:
+        normalized = re.sub(r"[^a-z0-9]+", " ", str(key).casefold()).strip()
+        for label, patterns in type_patterns.items():
+            if any(
+                pattern in normalized or pattern in str(key) for pattern in patterns
+            ):
+                return label
+    return "Skill"
+
+
 def _skill_effect(skill: dict[str, Any]) -> str:
     for key, value in skill.items():
         normalized = re.sub(r"[^a-z0-9]+", " ", str(key).casefold()).strip()
@@ -228,7 +244,10 @@ def _skill_effect(skill: dict[str, Any]) -> str:
     return "-"
 
 
-def _prepare_skill_sections(skills: list[Any]) -> list[dict[str, Any]]:
+def _prepare_skill_sections(
+    skills: list[Any],
+    note_image: str = "",
+) -> list[dict[str, Any]]:
     sections = {
         "Burst": [],
         "Ability": [],
@@ -239,8 +258,21 @@ def _prepare_skill_sections(skills: list[Any]) -> list[dict[str, Any]]:
         if not isinstance(skill, dict):
             continue
         skill_type, skill_name = _skill_type_and_name(skill)
+        detected_type = _skill_type(skill)
+        effect = _skill_effect(skill)
+        if detected_type != "Skill" and skill_name == "-":
+            if effect != "-":
+                sections[detected_type].append(
+                    {
+                        "is_note": True,
+                        "note": effect,
+                        "image": note_image,
+                    }
+                )
+            continue
         sections[skill_type].append(
             {
+                "is_note": False,
                 "icon": str(skill.get("icon") or skill.get("Icon") or ""),
                 "name": skill_name,
                 "requirements": _skill_value(
@@ -263,7 +295,7 @@ def _prepare_skill_sections(skills: list[Any]) -> list[dict[str, Any]]:
                     "effect duration",
                     "効果時間",
                 ),
-                "effect": _skill_effect(skill),
+                "effect": effect,
             }
         )
 
@@ -272,6 +304,62 @@ def _prepare_skill_sections(skills: list[Any]) -> list[dict[str, Any]]:
         for skill_type, rows in sections.items()
         if rows
     ]
+
+
+def _is_zero_number(value: Any) -> bool:
+    normalized = str(value or "").strip().replace(",", "")
+    return bool(re.fullmatch(r"0+(?:\.0+)?", normalized))
+
+
+def _weapon_stat_is_placeholder(row: dict[str, Any]) -> bool:
+    hp = row.get("HP") if "HP" in row else row.get("hp")
+    attack = row.get("Attack")
+    if attack in (None, ""):
+        attack = row.get("攻撃力")
+    return (
+        hp not in (None, "")
+        and attack not in (None, "")
+        and (_is_zero_number(hp) and _is_zero_number(attack))
+    )
+
+
+def _prepare_weapon_rows(
+    stats: Any,
+    bursts: Any,
+    weapon_skills: Any,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    valid_stats = (
+        [
+            dict(row)
+            for row in stats
+            if isinstance(row, dict) and not _weapon_stat_is_placeholder(row)
+        ]
+        if isinstance(stats, list)
+        else []
+    )
+    valid_bursts = (
+        [
+            dict(row)
+            for row in bursts
+            if isinstance(row, dict) and str(row.get("effect") or "").strip()
+        ]
+        if isinstance(bursts, list)
+        else []
+    )
+    valid_skills = (
+        [
+            dict(row)
+            for row in weapon_skills
+            if isinstance(row, dict)
+            and (
+                str(row.get("name") or "").strip()
+                or str(row.get("effect") or "").strip()
+            )
+        ]
+        if isinstance(weapon_skills, list)
+        else []
+    )
+    return valid_stats, valid_bursts, valid_skills
 
 
 def _prepare_eidolon_effects(effects: list[Any]) -> list[dict[str, Any]]:
@@ -391,7 +479,15 @@ def _load_cached(
                 "info": info,
                 "display_info": _display_info(info),
                 "skills": skills,
-                "skill_sections": _prepare_skill_sections(skills),
+                "skill_sections": _prepare_skill_sections(
+                    skills,
+                    note_image=str(
+                        info.get("list_image")
+                        or info.get("image")
+                        or info.get("img")
+                        or ""
+                    ),
+                ),
                 "has_skill_icons": any(
                     isinstance(skill, dict)
                     and bool(skill.get("icon") or skill.get("Icon"))
@@ -477,6 +573,12 @@ def _load_catalog_cached(
         stats = record.get("stats")
         bursts = record.get("bursts")
         weapon_skills = record.get("weapon_skills")
+        if object_type == "weapon":
+            stats, bursts, weapon_skills = _prepare_weapon_rows(
+                stats,
+                bursts,
+                weapon_skills,
+            )
         eidolon_effects = record.get("eidolon_effects")
         if isinstance(eidolon_effects, list):
             prepared_eidolon_effects = _prepare_eidolon_effects(
