@@ -1,6 +1,50 @@
 {
   "series": [
     {
+      "object_type": "kamihime",
+      "series_key": "kamihime:helix",
+      "series_name": "HELIX",
+      "source_prefixes": ["［HELIX］", "[HELIX]"],
+      "aliases": ["HELIX", "Helix"],
+      "expected_elements": ["fire", "water", "wind", "thunder", "light", "dark"]
+    },
+    {
+      "object_type": "kamihime",
+      "series_key": "kamihime:anti-mind",
+      "series_name": "Anti-Mind",
+      "source_names": ["アンラ・マンユ［純想悪］"],
+      "source_suffixes": ["［反心想］"],
+      "acquisition_contains": ["反想開花", "Reverse Bloom", "Counter-Blossom"],
+      "aliases": ["Anti-Mind", "反心想", "反想開花"],
+      "contextual_aliases": ["anti", "corruption", "rebellion"],
+      "banner_name": "反想開花",
+      "expected_elements": ["fire", "water", "wind", "thunder", "light", "dark"]
+    },
+    {
+      "object_type": "kamihime",
+      "series_key": "kamihime:shining",
+      "series_name": "Shining",
+      "source_suffixes": ["［心想昇華］"],
+      "acquisition_contains": ["心想昇華", "Sublimation of the Mind", "Sublimation of the Heart", "Mind Ascension"],
+      "aliases": ["心想昇華", "Sublimation of the Mind", "Mind Ascension"],
+      "contextual_aliases": ["shining"],
+      "banner_name": "心想昇華",
+      "expected_elements": ["fire", "water", "wind", "thunder", "light", "dark"]
+    },
+    {
+      "object_type": "kamihime",
+      "series_key": "kamihime:crystal",
+      "series_name": "Crystal",
+      "source_names": ["スプンタ・マンユ［至想善］"],
+      "source_suffixes": ["［契晶］"],
+      "acquisition_contains": ["契晶", "Contract Crystal"],
+      "aliases": ["契晶", "Contract Crystals"],
+      "contextual_aliases": ["crystal"],
+      "banner_name": "契晶",
+      "expected_elements": ["fire", "water", "wind", "thunder", "light", "dark"],
+      "lifecycle": "releasing"
+    },
+    {
       "object_type": "weapon",
       "series_key": "weapon:apocalypse",
       "series_name": "Apocalypse",

@@ -79,10 +79,12 @@ class Evidence(TypedDict):
     series_retrieved_member_count: int
     series_unreleased_elements: list[str]
     series_missing_elements: list[str]
+    series_coverage_status: Literal["complete", "releasing", "missing", "unknown"]
     series_coverage_complete: bool
 
 
 class AgentState(TypedDict, total=False):
+    runtime: Any
     session_id: str
     client_id: str
     provider: str

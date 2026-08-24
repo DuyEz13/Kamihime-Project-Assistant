@@ -17,6 +17,12 @@ from kami.agent.retrieval import (  # noqa: E402
 _LAST_PHASE = ""
 
 
+def _completion_message(result: dict) -> str:
+    return (
+        f"Built {result['collection']} with {result['documents']} documents."
+    )
+
+
 def _progress(status: dict) -> None:
     global _LAST_PHASE
     phase = str(status.get("phase") or "working")
@@ -63,10 +69,7 @@ def main() -> None:
         device=device,
         progress_callback=_progress,
     )
-    print(
-        f"Built {result['collection']} with {result['documents']} documents "
-        f"for {', '.join(result['object_types'])}."
-    )
+    print(_completion_message(result))
 
 
 if __name__ == "__main__":

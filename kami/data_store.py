@@ -57,10 +57,18 @@ def _object_data_paths(object_type: str = "kamihime") -> list[Path]:
 
     object_root = DATA_DIR / selected_object_type
     raw_element_paths = sorted(object_root.glob("*/raw.jsonl"))
-    if raw_element_paths:
+    element_names = {path.parent.name for path in raw_element_paths}
+    # The immutable cloud image intentionally ships only processed
+    # translations. Discover those element directories without requiring raw
+    # crawler output to be present in the runtime image.
+    element_names.update(
+        path.parent.parent.name for path in object_root.glob("*/translated/*.jsonl")
+    )
+    if element_names:
         paths: list[Path] = []
-        for raw_path in raw_element_paths:
-            element = raw_path.parent.name
+        raw_by_element = {path.parent.name: path for path in raw_element_paths}
+        for element in sorted(element_names):
+            raw_path = raw_by_element.get(element)
             translated_paths = [
                 object_translation_path(
                     DATA_DIR,
@@ -74,7 +82,10 @@ def _object_data_paths(object_type: str = "kamihime") -> list[Path]:
                 (path for path in translated_paths if path.exists()),
                 None,
             )
-            paths.append(translated_path or raw_path)
+            if translated_path is not None:
+                paths.append(translated_path)
+            elif raw_path is not None:
+                paths.append(raw_path)
         return paths
 
     if selected_object_type != "kamihime":
@@ -431,6 +442,7 @@ def _load_cached(
     characters: list[dict[str, Any]] = []
 
     for index, record in enumerate(records):
+        enrich_record_series(record, "kamihime")
         name = _name(record, index)
         base_slug = _slugify(name)
         used_slugs[base_slug] = used_slugs.get(base_slug, 0) + 1
@@ -449,6 +461,21 @@ def _load_cached(
                 "slug": slug,
                 "object_type": "kamihime",
                 "name": name,
+                "original_name": str(info.get("original_name") or ""),
+                "series_key": str(info.get("series_key") or ""),
+                "series_name": str(info.get("series_name") or ""),
+                "series_aliases": list(info.get("series_aliases") or []),
+                "series_contextual_aliases": list(
+                    info.get("series_contextual_aliases") or []
+                ),
+                "series_banner": str(info.get("series_banner") or ""),
+                "series_expected_elements": list(
+                    info.get("series_expected_elements") or []
+                ),
+                "series_lifecycle": str(
+                    info.get("series_lifecycle") or "complete"
+                ),
+                "series_detection": str(info.get("series_detection") or ""),
                 "image": (
                     info.get("image")
                     or info.get("img")
@@ -496,6 +523,24 @@ def _load_cached(
                 "flavor": record.get("flavor") or "",
             }
         )
+    series_groups: dict[str, list[dict[str, Any]]] = {}
+    for item in characters:
+        key = str(item.get("series_key") or "")
+        if key:
+            series_groups.setdefault(key, []).append(item)
+    for members in series_groups.values():
+        elements = list(
+            dict.fromkeys(
+                str(member.get("element") or "")
+                for member in members
+                if member.get("element")
+            )
+        )
+        slugs = [str(member.get("slug") or "") for member in members]
+        for member in members:
+            member["series_catalog_elements"] = elements
+            member["series_catalog_member_count"] = len(members)
+            member["series_catalog_slugs"] = slugs
     return tuple(characters)
 
 
@@ -613,6 +658,10 @@ def _load_catalog_cached(
                 "series_key": str(info.get("series_key") or ""),
                 "series_name": str(info.get("series_name") or ""),
                 "series_aliases": list(info.get("series_aliases") or []),
+                "series_contextual_aliases": list(
+                    info.get("series_contextual_aliases") or []
+                ),
+                "series_banner": str(info.get("series_banner") or ""),
                 "series_expected_elements": list(
                     info.get("series_expected_elements") or []
                 ),

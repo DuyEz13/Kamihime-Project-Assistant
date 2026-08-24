@@ -8,6 +8,7 @@ dependencies = [
     "beautifulsoup4>=4.12,<5",
     "deepl>=1.22,<2",
     "fastapi>=0.115,<1",
+    "fastembed>=0.7,<1",
     "httpx>=0.27,<1",
     "jinja2>=3.1,<4",
     "langchain>=1,<2",
@@ -18,6 +19,8 @@ dependencies = [
     "langgraph>=1,<2",
     "qdrant-client>=1.15,<2",
     "python-dotenv>=1,<2",
+    "sentence-transformers>=5,<6",
+    "torch==2.6.0",
     "uvicorn[standard]>=0.30,<1",
 ]
 
@@ -25,12 +28,7 @@ dependencies = [
 translation = [
     "accelerate>=1.2,<2",
     "autoawq==0.2.9; sys_platform == 'linux'",
-    "torch==2.6.0",
     "transformers==4.51.3",
-]
-rag = [
-    "fastembed>=0.7,<1",
-    "sentence-transformers>=5,<6",
 ]
 
 [dependency-groups]
@@ -40,6 +38,16 @@ dev = [
 
 [tool.uv]
 default-groups = ["dev"]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu124", marker = "sys_platform == 'win32'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

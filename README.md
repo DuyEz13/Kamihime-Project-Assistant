@@ -13,13 +13,11 @@ Optional features:
 ```powershell
 # Local Japanese-to-English translation
 uv sync --extra translation
-
-# Local dense/sparse embeddings and reranking
-uv sync --extra rag
-
-# Install every optional feature
-uv sync --all-extras
 ```
+
+The default `uv sync` installs everything needed to run the wiki, chatbot,
+hybrid RAG index, and reranker. On Windows, it installs the pinned CUDA 12.4
+build of PyTorch; RAG automatically falls back to CPU when CUDA is unavailable.
 
 ## Data Crawling
 
@@ -106,20 +104,24 @@ KAMI_CHAT_TRACE_INCLUDE_CONTENT=0
 
 The local trace file records graph, retrieval, model and token diagnostics; raw prompts, retrieved content and answers are included only when `KAMI_CHAT_TRACE_INCLUDE_CONTENT=1`.
 
-Install the RAG dependencies and build the local index:
+Build the local index after the initial `uv sync`. The default device is `auto`,
+so the builder uses CUDA when PyTorch can access it and otherwise uses CPU:
 
 ```powershell
-uv sync --extra rag
 uv run python scripts/build_rag_index.py
 ```
+
+Use `--device cpu`, `--device cuda`, or `--device cuda:<index>` only when you
+need to override automatic selection. Rebuild after changing normalized game
+data or RAG model/index settings. A rebuild is created in a separate staging
+directory and replaces the active index only after a successful smoke query, so
+a failed build does not destroy the last usable index.
 
 Main RAG options:
 
 ```dotenv
 KAMI_RAG_DEVICE=auto
-KAMI_RAG_EMBED_MODEL=intfloat/multilingual-e5-base
 KAMI_RAG_SPARSE_MODEL=Qdrant/bm25
-KAMI_RAG_RERANK_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
 KAMI_RAG_OBJECT_CANDIDATES_KAMIHIME=7
 KAMI_RAG_OBJECT_CANDIDATES_EIDOLON=7
 KAMI_RAG_OBJECT_CANDIDATES_WEAPON=24
@@ -129,10 +131,10 @@ KAMI_RAG_RERANK=1
 KAMI_RAG_INDEX_BATCH_SIZE=64
 ```
 
-To build with an existing CUDA-enabled Python environment:
+To require CUDA instead of using automatic selection:
 
 ```powershell
-python scripts/build_rag_index.py --device cuda
+uv run python scripts/build_rag_index.py --device cuda
 ```
 
 ## How to run
@@ -193,7 +195,7 @@ KamiWiki/
 |-- .env.example                # Example environment variables
 |-- .python-version             # Python version selected by uv
 |-- pyproject.toml              # Project metadata and dependency definitions
-|-- requirements.txt            # Core pip-compatible dependency list
+|-- requirements.txt            # Pip fallback; pyproject.toml/uv.lock are canonical
 |-- uv.lock                     # Reproducible dependency lockfile
 `-- README.md                   # Project documentation
 ```

@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import os
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Callable
 
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from ..data_store import load_catalog_items
 from .catalog_query import CatalogSelection, select_latest_catalog_items
@@ -13,6 +16,7 @@ from .language import detect_response_language, guarded_question, language_name
 from .providers import ModelTelemetry, model_info, plan_with_model
 from .retrieval import (
     exact_series_matches,
+    series_aliases_for_query,
     contains_normalized_phrase,
     hydrate_catalog_items,
     normalize_text,
@@ -22,6 +26,21 @@ from .retrieval import (
 from .schemas import AgentState, EntityQuery, QueryPlan
 from .section_scope import detect_requested_sections
 from .tracing import ChatTrace, NullChatTrace
+
+
+PlannerCallback = Callable[
+    [str, str, str, list[dict], dict, ModelTelemetry | None],
+    QueryPlan,
+]
+
+
+@dataclass(frozen=True)
+class AgentRuntime:
+    loader: CatalogLoader
+    answer_callback: Callable[[str, str, str, str, str], str]
+    telemetry: ModelTelemetry | None = None
+    trace: ChatTrace | NullChatTrace | None = None
+    planner_callback: PlannerCallback | None = None
 
 
 DOMAIN_WORDS = {
@@ -163,6 +182,19 @@ def _deterministic_entities(
         if isinstance(item, dict) and item.get("series_key")
     }
 
+    explicit_objects = _explicit_object_matches(message, types, loader)
+    if explicit_objects:
+        return [
+            EntityQuery(
+                mention=str(item.get("name") or ""),
+                name=str(item.get("name") or ""),
+                object_type=str(item.get("object_type") or "") or None,
+                series_key=str(item.get("series_key") or "") or None,
+                retrieval_query=f"{item.get('name')}: {message}",
+            )
+            for item in explicit_objects
+        ]
+
     exact_matches = exact_series_matches(message, types, loader)
     for series_key, (series_name, object_type) in exact_matches.items():
         matched_series.add(series_key)
@@ -177,9 +209,7 @@ def _deterministic_entities(
             for item in loader(object_type):
                 series_key = str(item.get("series_key") or "")
                 series_name = str(item.get("series_name") or "")
-                aliases = list(item.get("series_aliases") or [])
-                if series_name and series_name not in aliases:
-                    aliases.append(series_name)
+                aliases = series_aliases_for_query(item, message)
                 if not series_key or series_key in matched_series:
                     continue
                 if series_alias_score(message, aliases) >= 0.88:
@@ -411,10 +441,12 @@ def _plan_node(
     state: AgentState,
     loader: CatalogLoader,
     telemetry: ModelTelemetry | None = None,
+    planner_callback: PlannerCallback | None = None,
 ) -> dict[str, Any]:
     info = model_info(state["provider"])
     if info.configured and os.getenv("KAMI_AGENT_DISABLE_LLM_PLANNER", "0") != "1":
-        plan = plan_with_model(
+        planner = planner_callback or plan_with_model
+        plan = planner(
             state["provider"],
             state["model"],
             state["message"],
@@ -562,6 +594,7 @@ def _retrieval_diagnostics(
         "series_retrieved_member_count",
         "series_missing_elements",
         "series_unreleased_elements",
+        "series_coverage_status",
         "series_coverage_complete",
     )
     for source in sources:
@@ -685,6 +718,9 @@ def _retrieve_node(state: AgentState, loader: CatalogLoader) -> dict[str, Any]:
                 "series_missing_elements": item.get(
                     "series_missing_elements", []
                 ),
+                "series_coverage_status": item.get(
+                    "series_coverage_status", "unknown"
+                ),
                 "series_coverage_complete": item.get(
                     "series_coverage_complete", False
                 ),
@@ -801,6 +837,119 @@ def _missing_node(state: AgentState) -> dict[str, Any]:
     return {"answer": answer}
 
 
+def _agent_runtime(state: AgentState) -> AgentRuntime:
+    runtime = state.get("runtime")
+    if not isinstance(runtime, AgentRuntime):
+        raise TypeError("Agent state requires an AgentRuntime")
+    return runtime
+
+
+def _runtime_plan_node(state: AgentState) -> dict[str, Any]:
+    runtime = _agent_runtime(state)
+    telemetry = runtime.telemetry or (
+        runtime.trace.record_model_call if runtime.trace is not None else None
+    )
+    return _plan_node(
+        state,
+        runtime.loader,
+        telemetry,
+        runtime.planner_callback,
+    )
+
+
+def _runtime_retrieve_node(state: AgentState) -> dict[str, Any]:
+    return _retrieve_node(state, _agent_runtime(state).loader)
+
+
+def _runtime_answer_node(state: AgentState) -> dict[str, Any]:
+    return _answer_node(state, _agent_runtime(state).answer_callback)
+
+
+def _traced_runtime_node(
+    name: str,
+    callback: Callable[[AgentState], dict[str, Any]],
+) -> Callable[[AgentState], dict[str, Any]]:
+    def invoke(state: AgentState) -> dict[str, Any]:
+        trace = _agent_runtime(state).trace
+        if trace is None:
+            return callback(state)
+        with trace.node(name):
+            output = callback(state)
+        if name == "plan" and output.get("plan") is not None:
+            trace.record_plan(output["plan"])
+        elif name == "retrieve":
+            trace.record_retrieval(
+                output.get("retrieval_diagnostics", {}),
+                output.get("evidence", []),
+            )
+        return output
+
+    return invoke
+
+
+@lru_cache(maxsize=1)
+def build_agent_graph() -> CompiledStateGraph:
+    builder = StateGraph(AgentState)
+    builder.add_node(
+        "plan",
+        _traced_runtime_node("plan", _runtime_plan_node),
+    )
+    builder.add_node("refuse", _traced_runtime_node("refuse", _refuse_node))
+    builder.add_node("clarify", _traced_runtime_node("clarify", _clarify_node))
+    builder.add_node(
+        "retrieve",
+        _traced_runtime_node("retrieve", _runtime_retrieve_node),
+    )
+    builder.add_node(
+        "answer",
+        _traced_runtime_node("answer", _runtime_answer_node),
+    )
+    builder.add_node("missing", _traced_runtime_node("missing", _missing_node))
+    builder.add_edge(START, "plan")
+    builder.add_conditional_edges(
+        "plan",
+        _after_plan,
+        {"refuse": "refuse", "clarify": "clarify", "retrieve": "retrieve"},
+    )
+    builder.add_conditional_edges(
+        "retrieve",
+        _after_retrieve,
+        {"answer": "answer", "missing": "missing"},
+    )
+    for node in ("refuse", "clarify", "answer", "missing"):
+        builder.add_edge(node, END)
+    return builder.compile()
+
+
+def invoke_agent(
+    graph: CompiledStateGraph,
+    *,
+    runtime: AgentRuntime,
+    session_id: str,
+    client_id: str,
+    provider: str,
+    model: str,
+    message: str,
+    history: list[dict],
+    memory_state: dict,
+) -> dict[str, Any]:
+    result = graph.invoke(
+        {
+            "runtime": runtime,
+            "session_id": session_id,
+            "client_id": client_id,
+            "provider": provider,
+            "model": model,
+            "message": message,
+            "history": history,
+            "memory_state": memory_state,
+        }
+    )
+    public_result = dict(result)
+    public_result.pop("runtime", None)
+    return public_result
+
+
 def run_agent(
     *,
     session_id: str,
@@ -815,74 +964,20 @@ def run_agent(
     telemetry: ModelTelemetry | None = None,
     trace: ChatTrace | NullChatTrace | None = None,
 ) -> dict[str, Any]:
-    model_telemetry = telemetry or (
-        trace.record_model_call if trace is not None else None
+    runtime = AgentRuntime(
+        loader=loader,
+        answer_callback=answer_callback,
+        telemetry=telemetry,
+        trace=trace,
     )
-
-    def traced_node(
-        name: str,
-        callback: Callable[[AgentState], dict[str, Any]],
-    ) -> Callable[[AgentState], dict[str, Any]]:
-        def invoke(state: AgentState) -> dict[str, Any]:
-            if trace is None:
-                return callback(state)
-            with trace.node(name):
-                output = callback(state)
-            if name == "plan" and output.get("plan") is not None:
-                trace.record_plan(output["plan"])
-            elif name == "retrieve":
-                trace.record_retrieval(
-                    output.get("retrieval_diagnostics", {}),
-                    output.get("evidence", []),
-                )
-            return output
-
-        return invoke
-
-    builder = StateGraph(AgentState)
-    builder.add_node(
-        "plan",
-        traced_node(
-            "plan",
-            lambda state: _plan_node(state, loader, model_telemetry),
-        ),
-    )
-    builder.add_node("refuse", traced_node("refuse", _refuse_node))
-    builder.add_node("clarify", traced_node("clarify", _clarify_node))
-    builder.add_node(
-        "retrieve",
-        traced_node("retrieve", lambda state: _retrieve_node(state, loader)),
-    )
-    builder.add_node(
-        "answer",
-        traced_node(
-            "answer",
-            lambda state: _answer_node(state, answer_callback),
-        ),
-    )
-    builder.add_node("missing", traced_node("missing", _missing_node))
-    builder.add_edge(START, "plan")
-    builder.add_conditional_edges(
-        "plan",
-        _after_plan,
-        {"refuse": "refuse", "clarify": "clarify", "retrieve": "retrieve"},
-    )
-    builder.add_conditional_edges(
-        "retrieve",
-        _after_retrieve,
-        {"answer": "answer", "missing": "missing"},
-    )
-    for node in ("refuse", "clarify", "answer", "missing"):
-        builder.add_edge(node, END)
-    graph = builder.compile()
-    return graph.invoke(
-        {
-            "session_id": session_id,
-            "client_id": client_id,
-            "provider": provider,
-            "model": model,
-            "message": message,
-            "history": history,
-            "memory_state": memory_state,
-        }
+    return invoke_agent(
+        build_agent_graph(),
+        runtime=runtime,
+        session_id=session_id,
+        client_id=client_id,
+        provider=provider,
+        model=model,
+        message=message,
+        history=history,
+        memory_state=memory_state,
     )

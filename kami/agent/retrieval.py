@@ -2,16 +2,21 @@ from __future__ import annotations
 
 import json
 import hashlib
+import importlib.metadata
 import logging
 import os
 import re
+import shutil
 import threading
 import unicodedata
 import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from difflib import SequenceMatcher
 from collections import defaultdict
 from collections.abc import Callable, Iterable
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 from langchain_core.documents import Document
@@ -36,9 +41,42 @@ OBJECT_CANDIDATES_BY_TYPE = {
     "eidolon": 7,
     "weapon": 24,
 }
-INDEX_SCHEMA_VERSION = 4
+INDEX_SCHEMA_VERSION = 5
+EMBEDDING_MODEL_ID = "intfloat/multilingual-e5-base"
+EMBEDDING_MODEL_REVISION = "d128750597153bb5987e10b1c3493a34e5a4502a"
+EMBEDDING_DIMENSION = 768
+RERANKER_MODEL_ID = "cross-encoder/ms-marco-MiniLM-L6-v2"
+RERANKER_MODEL_REVISION = "233902d25c440f23af6f7d6e94d2946bac0bee0a"
+REQUIRED_MANIFEST_KEYS = {
+    "schema_version",
+    "collection",
+    "catalog_fingerprint",
+    "documents",
+    "model_id",
+    "model_revision",
+    "dimension",
+    "sparse_model",
+    "qdrant_client_version",
+    "built_at",
+}
 _INDEX_LOCK = threading.RLock()
 LOGGER = logging.getLogger(__name__)
+
+
+class IndexCompatibilityError(RuntimeError):
+    pass
+
+
+@dataclass
+class RetrievalRuntime:
+    client: Any
+    store: Any
+    collection: str
+    manifest: dict[str, Any]
+    index_dir: Path
+
+
+_RETRIEVAL_RUNTIME: RetrievalRuntime | None = None
 
 
 def _env_int(name: str, default: int, minimum: int = 1) -> int:
@@ -80,6 +118,11 @@ def _candidate_limit(object_type: str) -> int:
     return default
 
 
+def has_series_intent(query: str) -> bool:
+    tokens = set(normalize_text(query).split())
+    return bool(tokens & {"series", "dong", "nhom"})
+
+
 def series_alias_score(query: str, aliases: Iterable[str]) -> float:
     normalized_query = normalize_text(query)
     if not normalized_query:
@@ -110,12 +153,35 @@ def series_alias_score(query: str, aliases: Iterable[str]) -> float:
     return best
 
 
-def _series_aliases(item: dict[str, Any]) -> list[str]:
+def series_aliases_for_query(item: dict[str, Any], query: str) -> list[str]:
     aliases = [str(value) for value in item.get("series_aliases") or [] if value]
+    contextual = {
+        normalize_text(str(value))
+        for value in item.get("series_contextual_aliases") or []
+        if value
+    }
+    if has_series_intent(query):
+        aliases.extend(
+            str(value)
+            for value in item.get("series_contextual_aliases") or []
+            if value
+        )
+    else:
+        aliases = [
+            alias for alias in aliases if normalize_text(alias) not in contextual
+        ]
     series_name = str(item.get("series_name") or "")
-    if series_name and series_name not in aliases:
+    if (
+        series_name
+        and normalize_text(series_name) not in contextual
+        and series_name not in aliases
+    ):
         aliases.append(series_name)
-    return aliases
+    return list(dict.fromkeys(aliases))
+
+
+def _series_aliases(item: dict[str, Any]) -> list[str]:
+    return series_aliases_for_query(item, "series")
 
 
 def exact_series_matches(
@@ -131,7 +197,7 @@ def exact_series_matches(
         if not series_key or series_key in seen:
             continue
         seen.add(series_key)
-        for alias in _series_aliases(item):
+        for alias in series_aliases_for_query(item, query):
             normalized_alias = normalize_text(alias)
             if contains_normalized_phrase(normalized_query, normalized_alias):
                 candidates.append(
@@ -180,21 +246,26 @@ def resolve_object_variants(
         return []
     query_tokens = set(query.split())
     objects = _all_objects(object_types, loader)
-    exact_series_keys = set(
-        exact_series_matches(mention, object_types, loader)
-    )
     exact_object_keys = {
         (
             str(item.get("object_type") or ""),
             str(item.get("slug") or ""),
         )
         for item in objects
-        if str(item.get("object_type") or "") != "kamihime"
+        if (
+            str(item.get("object_type") or "") != "kamihime"
+            or len(normalize_text(str(item.get("name") or "")).split()) >= 2
+        )
         and (
             query == normalize_text(str(item.get("name") or ""))
         or folded_query == _fold_text(str(item.get("name") or ""))
         )
     }
+    exact_series_keys = (
+        set()
+        if exact_object_keys
+        else set(exact_series_matches(mention, object_types, loader))
+    )
     scored: list[tuple[dict[str, Any], float]] = []
     for item in objects:
         if element and str(item.get("element") or "").casefold() != element.casefold():
@@ -226,7 +297,7 @@ def resolve_object_variants(
             score = 85.0 + len(query_tokens & name_tokens)
         elif query_tokens and query_tokens <= name_tokens:
             score = 70.0 + len(query_tokens)
-        aliases = _series_aliases(item)
+        aliases = series_aliases_for_query(item, mention)
         for alias in aliases:
             normalized_alias = normalize_text(alias)
             folded_alias = _fold_text(alias)
@@ -258,6 +329,8 @@ def resolve_object_variants(
     scored.sort(key=lambda pair: pair[1], reverse=True)
     if limit is not None:
         return scored[:limit]
+    if series_key:
+        return scored
     selected: list[tuple[dict[str, Any], float]] = []
     used: dict[str, int] = defaultdict(int)
     for pair in scored:
@@ -269,17 +342,72 @@ def resolve_object_variants(
     return selected
 
 
+def resolve_structural_series_variants(
+    mention: str,
+    object_types: Iterable[str],
+    loader: CatalogLoader = load_catalog_items,
+) -> list[tuple[dict[str, Any], float]]:
+    if not has_series_intent(mention):
+        return []
+    normalized_query = normalize_text(mention)
+    folded_query = _fold_text(mention)
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for item in _all_objects(object_types, loader):
+        labels: set[str] = set()
+        for value in (item.get("original_name"), item.get("name")):
+            normalized_name = unicodedata.normalize("NFKC", str(value or ""))
+            prefix = re.match(r"^\[([^]]+)\]", normalized_name)
+            suffix = re.search(r"\[([^]]+)\]$", normalized_name)
+            if prefix:
+                labels.add(prefix.group(1))
+            if suffix:
+                labels.add(suffix.group(1))
+        for label in labels:
+            normalized_label = normalize_text(label)
+            folded_label = _fold_text(label)
+            label_matches = (
+                contains_normalized_phrase(normalized_query, normalized_label)
+                if normalized_label
+                else bool(folded_label and folded_label in folded_query)
+            )
+            if label_matches:
+                groups[
+                    (str(item.get("object_type") or ""), folded_label)
+                ].append(item)
+    candidates = [
+        (key, members)
+        for key, members in groups.items()
+        if len({str(item.get("slug") or "") for item in members}) >= 2
+    ]
+    if not candidates:
+        return []
+    candidates.sort(
+        key=lambda pair: (len(pair[0][1]), len(pair[1])),
+        reverse=True,
+    )
+    return [(item, 96.0) for item in candidates[0][1]]
+
+
 class SentenceTransformerEmbeddingAdapter(Embeddings):
-    def __init__(self, model_name: str, device: str | None = None):
+    def __init__(
+        self,
+        model_name: str,
+        device: str | None = None,
+        revision: str = EMBEDDING_MODEL_REVISION,
+    ):
         try:
             from sentence_transformers import SentenceTransformer
         except ImportError as exc:
             raise RuntimeError(
-                "RAG embeddings require `uv sync --extra rag`"
+                "RAG embeddings are missing; run `uv sync`"
             ) from exc
         self.model_name = model_name
         self.device = resolve_embedding_device(device)
-        self.model = SentenceTransformer(model_name, device=self.device)
+        self.model = SentenceTransformer(
+            model_name,
+            device=self.device,
+            revision=revision,
+        )
 
     def _prefix(self, text: str, kind: str) -> str:
         if "e5" in self.model_name.casefold():
@@ -304,10 +432,12 @@ class SentenceTransformerEmbeddingAdapter(Embeddings):
 
 
 def _embedding_model() -> str:
-    return os.getenv(
-        "KAMI_RAG_EMBED_MODEL",
-        "intfloat/multilingual-e5-base",
-    )
+    configured = os.getenv("KAMI_RAG_EMBED_MODEL", EMBEDDING_MODEL_ID).strip()
+    if configured != EMBEDDING_MODEL_ID:
+        raise ValueError(
+            f"KAMI_RAG_EMBED_MODEL must remain pinned to {EMBEDDING_MODEL_ID}"
+        )
+    return EMBEDDING_MODEL_ID
 
 
 def resolve_embedding_device(requested: str | None = None) -> str:
@@ -315,7 +445,7 @@ def resolve_embedding_device(requested: str | None = None) -> str:
         import torch
     except ImportError as exc:
         raise RuntimeError(
-            "RAG embeddings require PyTorch; run `uv sync --extra rag`"
+            "RAG embeddings require PyTorch; run `uv sync`"
         ) from exc
 
     value = (requested or os.getenv("KAMI_RAG_DEVICE") or "auto").strip().lower()
@@ -345,12 +475,131 @@ def _sparse_model() -> str:
     return os.getenv("KAMI_RAG_SPARSE_MODEL", "Qdrant/bm25")
 
 
-def _read_manifest() -> dict[str, Any]:
+def _read_manifest(index_dir: str | Path | None = None) -> dict[str, Any]:
+    manifest_path = (
+        Path(index_dir) / "manifest.json" if index_dir is not None else MANIFEST_PATH
+    )
     try:
-        value = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+        value = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def validate_index_metadata(
+    manifest: dict[str, Any],
+    expected: dict[str, Any],
+) -> dict[str, Any]:
+    missing = sorted(REQUIRED_MANIFEST_KEYS - set(manifest))
+    if missing:
+        raise IndexCompatibilityError(
+            f"Index manifest is missing required field: {missing[0]}"
+        )
+    for field, expected_value in expected.items():
+        if field not in REQUIRED_MANIFEST_KEYS or expected_value is None:
+            continue
+        if manifest.get(field) != expected_value:
+            raise IndexCompatibilityError(
+                f"Index metadata mismatch for {field}: "
+                f"expected {expected_value!r}, got {manifest.get(field)!r}"
+            )
+    return manifest
+
+
+def expected_index_metadata(
+    *,
+    catalog_fingerprint: str,
+    documents: int,
+) -> dict[str, Any]:
+    return {
+        "schema_version": INDEX_SCHEMA_VERSION,
+        "catalog_fingerprint": catalog_fingerprint,
+        "documents": documents,
+        "model_id": EMBEDDING_MODEL_ID,
+        "model_revision": EMBEDDING_MODEL_REVISION,
+        "dimension": EMBEDDING_DIMENSION,
+        "sparse_model": _sparse_model(),
+        "qdrant_client_version": importlib.metadata.version("qdrant-client"),
+    }
+
+
+def _open_runtime_components(
+    index_dir: Path,
+    manifest: dict[str, Any],
+) -> tuple[Any, Any]:
+    from langchain_qdrant import FastEmbedSparse, QdrantVectorStore, RetrievalMode
+    from qdrant_client import QdrantClient
+
+    dense = _query_embedding(
+        str(manifest["model_id"]),
+        str(manifest["model_revision"]),
+        resolve_embedding_device(),
+    )
+    sparse = FastEmbedSparse(model_name=str(manifest["sparse_model"]))
+    client = QdrantClient(path=str(index_dir / "qdrant"))
+    try:
+        if not client.collection_exists(str(manifest["collection"])):
+            raise IndexCompatibilityError(
+                "Index collection declared by manifest does not exist"
+            )
+        store = QdrantVectorStore(
+            client=client,
+            collection_name=str(manifest["collection"]),
+            embedding=dense,
+            sparse_embedding=sparse,
+            retrieval_mode=RetrievalMode.HYBRID,
+            vector_name="dense",
+            sparse_vector_name="sparse",
+        )
+        return client, store
+    except BaseException:
+        client.close()
+        raise
+
+
+def start_retrieval_runtime(
+    index_dir: str | Path,
+    expected: dict[str, Any],
+) -> RetrievalRuntime:
+    global _RETRIEVAL_RUNTIME
+    selected_dir = Path(index_dir).resolve()
+    with _INDEX_LOCK:
+        manifest = validate_index_metadata(
+            _read_manifest(selected_dir),
+            expected,
+        )
+        if _RETRIEVAL_RUNTIME is not None:
+            if (
+                _RETRIEVAL_RUNTIME.index_dir == selected_dir
+                and _RETRIEVAL_RUNTIME.collection == manifest["collection"]
+            ):
+                return _RETRIEVAL_RUNTIME
+            raise RuntimeError("A different retrieval runtime is already active")
+        client, store = _open_runtime_components(selected_dir, manifest)
+        _RETRIEVAL_RUNTIME = RetrievalRuntime(
+            client=client,
+            store=store,
+            collection=str(manifest["collection"]),
+            manifest=dict(manifest),
+            index_dir=selected_dir,
+        )
+        return _RETRIEVAL_RUNTIME
+
+
+def get_retrieval_runtime() -> RetrievalRuntime | None:
+    return _RETRIEVAL_RUNTIME
+
+
+def stop_retrieval_runtime() -> None:
+    global _RETRIEVAL_RUNTIME
+    with _INDEX_LOCK:
+        runtime = _RETRIEVAL_RUNTIME
+        _RETRIEVAL_RUNTIME = None
+        if runtime is not None:
+            runtime.client.close()
+        _query_embedding.cache_clear()
+        _query_sparse_embedding.cache_clear()
+        _reranker_model.cache_clear()
 
 
 def index_available() -> bool:
@@ -358,8 +607,69 @@ def index_available() -> bool:
     return bool(
         manifest.get("collection")
         and int(manifest.get("schema_version") or 0) == INDEX_SCHEMA_VERSION
+        and REQUIRED_MANIFEST_KEYS <= set(manifest)
         and INDEX_DIR.exists()
     )
+
+
+def _remove_inactive_collection_directories(
+    index_dir: str | Path,
+    active_collection: str,
+) -> tuple[str, ...]:
+    """Remove Qdrant collection directories not named by the smoke-tested manifest."""
+    selected_dir = Path(index_dir).resolve()
+    collection_root = (selected_dir / "qdrant" / "collection").resolve()
+    if collection_root.parent.parent != selected_dir:
+        raise ValueError("Collection root escaped the selected RAG index directory")
+    if not collection_root.is_dir():
+        return ()
+    removed: list[str] = []
+    for candidate in collection_root.iterdir():
+        if not candidate.is_dir() or candidate.name == active_collection:
+            continue
+        resolved = candidate.resolve()
+        if resolved.parent != collection_root:
+            raise ValueError("Collection directory escaped the selected root")
+        shutil.rmtree(resolved)
+        removed.append(candidate.name)
+    return tuple(sorted(removed))
+
+
+def _build_cache_matches(
+    manifest: dict[str, Any],
+    *,
+    collection: str,
+    documents: int,
+    qdrant_client_version: str,
+) -> bool:
+    return bool(
+        manifest.get("collection") == collection
+        and int(manifest.get("documents") or 0) == documents
+        and manifest.get("qdrant_client_version") == qdrant_client_version
+    )
+
+
+def _promote_staged_index(active_dir: str | Path, staging_dir: str | Path) -> None:
+    active = Path(active_dir).resolve()
+    staging = Path(staging_dir).resolve()
+    if active == staging or active.parent != staging.parent:
+        raise ValueError("Staged RAG index must be a sibling of the active index")
+    if not staging.is_dir() or not (staging / "manifest.json").is_file():
+        raise ValueError("Staged RAG index is incomplete")
+
+    backup = active.with_name(f"{active.name}.backup-{uuid.uuid4().hex}")
+    moved_active = False
+    try:
+        if active.exists():
+            active.replace(backup)
+            moved_active = True
+        staging.replace(active)
+    except BaseException:
+        if moved_active and backup.exists() and not active.exists():
+            backup.replace(active)
+        raise
+    if backup.exists():
+        shutil.rmtree(backup)
 
 
 def build_rag_index(
@@ -368,6 +678,8 @@ def build_rag_index(
     device: str | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
+    if get_retrieval_runtime() is not None:
+        raise RuntimeError("Cannot build an index while the retrieval runtime is active")
     try:
         from langchain_qdrant import (
             FastEmbedSparse,
@@ -377,7 +689,7 @@ def build_rag_index(
         from qdrant_client import QdrantClient, models
     except ImportError as exc:
         raise RuntimeError(
-            "Hybrid indexing requires `uv sync --extra rag`"
+            "Hybrid indexing dependencies are missing; run `uv sync`"
         ) from exc
 
     selected_types = tuple(dict.fromkeys(object_types))
@@ -399,18 +711,22 @@ def build_rag_index(
     fingerprint = hashlib.sha256(
         (
             f"{INDEX_SCHEMA_VERSION}:{content_fingerprint}:{_embedding_model()}:"
-            f"{_sparse_model()}"
+            f"{EMBEDDING_MODEL_REVISION}:{_sparse_model()}"
         ).encode("utf-8")
     ).hexdigest()[:16]
     collection = f"kamiwiki_{fingerprint}"
-    INDEX_DIR.mkdir(parents=True, exist_ok=True)
+    INDEX_DIR.parent.mkdir(parents=True, exist_ok=True)
 
     with _INDEX_LOCK:
         current_manifest = _read_manifest()
-        if (
-            current_manifest.get("collection") == collection
-            and int(current_manifest.get("documents") or 0) == len(documents)
+        qdrant_client_version = importlib.metadata.version("qdrant-client")
+        if _build_cache_matches(
+            current_manifest,
+            collection=collection,
+            documents=len(documents),
+            qdrant_client_version=qdrant_client_version,
         ):
+            _remove_inactive_collection_directories(INDEX_DIR, collection)
             if progress_callback:
                 progress_callback(
                     {
@@ -436,10 +752,21 @@ def build_rag_index(
         dense = SentenceTransformerEmbeddingAdapter(
             _embedding_model(),
             device=resolved_device,
+            revision=EMBEDDING_MODEL_REVISION,
         )
         sparse = FastEmbedSparse(model_name=_sparse_model())
         vector_size = len(dense.embed_query("Kamihime Project"))
-        client = QdrantClient(path=str(INDEX_DIR / "qdrant"))
+        if vector_size != EMBEDDING_DIMENSION:
+            raise IndexCompatibilityError(
+                f"Dense embedding dimension must be {EMBEDDING_DIMENSION}, "
+                f"got {vector_size}"
+            )
+        staging_dir = INDEX_DIR.with_name(
+            f"{INDEX_DIR.name}.build-{uuid.uuid4().hex}"
+        )
+        staging_dir.mkdir()
+        client = QdrantClient(path=str(staging_dir / "qdrant"))
+        built_manifest: dict[str, Any] | None = None
         try:
             if client.collection_exists(collection):
                 client.delete_collection(collection)
@@ -504,36 +831,60 @@ def build_rag_index(
                         }
                     )
 
+            smoke = store.similarity_search_with_score(
+                "Kamihime Project",
+                k=1,
+            )
+            if not smoke:
+                raise RuntimeError("New RAG collection failed its smoke query")
+            for description in client.get_collections().collections:
+                if description.name != collection:
+                    client.delete_collection(description.name)
+
             manifest = {
                 "schema_version": INDEX_SCHEMA_VERSION,
                 "collection": collection,
-                "fingerprint": fingerprint,
+                "catalog_fingerprint": content_fingerprint,
                 "documents": len(documents),
-                "object_types": list(selected_types),
-                "embedding_model": _embedding_model(),
+                "model_id": _embedding_model(),
+                "model_revision": EMBEDDING_MODEL_REVISION,
+                "dimension": vector_size,
                 "sparse_model": _sparse_model(),
-                "build_device": resolved_device,
+                "qdrant_client_version": qdrant_client_version,
+                "built_at": datetime.now(UTC).isoformat(),
             }
-            temporary = MANIFEST_PATH.with_suffix(".tmp")
+            temporary = staging_dir / "manifest.tmp"
             temporary.write_text(
                 json.dumps(manifest, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
-            temporary.replace(MANIFEST_PATH)
-            if progress_callback:
-                progress_callback(
-                    {
-                        "phase": "complete",
-                        "processed": total,
-                        "total": total,
-                        "progress": 100,
-                        "cached": False,
-                        "message": "RAG index build complete",
-                    }
-                )
-            return manifest
-        finally:
+            temporary.replace(staging_dir / "manifest.json")
+            built_manifest = manifest
+        except BaseException:
             client.close()
+            if staging_dir.exists():
+                shutil.rmtree(staging_dir)
+            raise
+        client.close()
+        assert built_manifest is not None
+        try:
+            _promote_staged_index(INDEX_DIR, staging_dir)
+        except BaseException:
+            if staging_dir.exists():
+                shutil.rmtree(staging_dir)
+            raise
+        if progress_callback:
+            progress_callback(
+                {
+                    "phase": "complete",
+                    "processed": total,
+                    "total": total,
+                    "progress": 100,
+                    "cached": False,
+                    "message": "RAG index build complete",
+                }
+            )
+        return built_manifest
 
 
 def refresh_rag_index(object_type: str | None = None) -> dict[str, Any] | None:
@@ -546,9 +897,14 @@ def refresh_rag_index(object_type: str | None = None) -> dict[str, Any] | None:
 @lru_cache(maxsize=4)
 def _query_embedding(
     model_name: str,
+    revision: str,
     device: str,
 ) -> SentenceTransformerEmbeddingAdapter:
-    return SentenceTransformerEmbeddingAdapter(model_name, device=device)
+    return SentenceTransformerEmbeddingAdapter(
+        model_name,
+        device=device,
+        revision=revision,
+    )
 
 
 @lru_cache(maxsize=2)
@@ -564,64 +920,44 @@ def _qdrant_search(
     object_keys: list[tuple[str, str]] | None,
     k: int,
 ) -> list[tuple[Document, float]]:
-    from langchain_qdrant import QdrantVectorStore, RetrievalMode
-    from qdrant_client import QdrantClient, models
+    from qdrant_client import models
 
-    with _INDEX_LOCK:
+    runtime = get_retrieval_runtime()
+    if runtime is None:
         manifest = _read_manifest()
-        collection = str(manifest.get("collection") or "")
-        if not collection:
+        if not manifest:
             return []
-        dense = _query_embedding(
-            str(manifest.get("embedding_model") or _embedding_model()),
-            resolve_embedding_device(),
+        runtime = start_retrieval_runtime(INDEX_DIR, manifest)
+    must = [
+        models.FieldCondition(
+            key="metadata.object_type",
+            match=models.MatchAny(any=object_types),
         )
-        sparse = _query_sparse_embedding(
-            str(manifest.get("sparse_model") or _sparse_model())
-        )
-        client = QdrantClient(path=str(INDEX_DIR / "qdrant"))
-        try:
-            store = QdrantVectorStore(
-                client=client,
-                collection_name=collection,
-                embedding=dense,
-                sparse_embedding=sparse,
-                retrieval_mode=RetrievalMode.HYBRID,
-                vector_name="dense",
-                sparse_vector_name="sparse",
-            )
-            must = [
-                models.FieldCondition(
-                    key="metadata.object_type",
-                    match=models.MatchAny(any=object_types),
-                )
-            ]
-            if object_keys:
-                should = [
-                    models.Filter(
-                        must=[
-                            models.FieldCondition(
-                                key="metadata.object_type",
-                                match=models.MatchValue(value=object_type),
-                            ),
-                            models.FieldCondition(
-                                key="metadata.slug",
-                                match=models.MatchValue(value=slug),
-                            ),
-                        ]
-                    )
-                    for object_type, slug in object_keys
+    ]
+    if object_keys:
+        should = [
+            models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="metadata.object_type",
+                        match=models.MatchValue(value=object_type),
+                    ),
+                    models.FieldCondition(
+                        key="metadata.slug",
+                        match=models.MatchValue(value=slug),
+                    ),
                 ]
-                query_filter = models.Filter(must=must, should=should)
-            else:
-                query_filter = models.Filter(must=must)
-            return store.similarity_search_with_score(
-                query,
-                k=k,
-                filter=query_filter,
             )
-        finally:
-            client.close()
+            for object_type, slug in object_keys
+        ]
+        query_filter = models.Filter(must=must, should=should)
+    else:
+        query_filter = models.Filter(must=must)
+    return runtime.store.similarity_search_with_score(
+        query,
+        k=k,
+        filter=query_filter,
+    )
 
 
 def _lexical_score(query: str, doc: Document) -> float:
@@ -660,10 +996,8 @@ def _reranker_model():
     from sentence_transformers import CrossEncoder
 
     return CrossEncoder(
-        os.getenv(
-            "KAMI_RAG_RERANK_MODEL",
-            "cross-encoder/ms-marco-MiniLM-L-6-v2",
-        )
+        RERANKER_MODEL_ID,
+        revision=RERANKER_MODEL_REVISION,
     )
 
 
@@ -885,6 +1219,7 @@ def _to_evidence(
         "series_retrieved_member_count": 0,
         "series_unreleased_elements": [],
         "series_missing_elements": [],
+        "series_coverage_status": "unknown",
         "series_coverage_complete": False,
     }
 
@@ -897,7 +1232,8 @@ def _annotate_series_coverage(evidence: list[Evidence]) -> list[Evidence]:
             grouped[series_key].append(item)
         else:
             item["series_elements"] = [item["element"]] if item["element"] else []
-            item["series_coverage_complete"] = True
+            item["series_coverage_status"] = "unknown"
+            item["series_coverage_complete"] = False
 
     for values in grouped.values():
         retrieved_slugs = {item["slug"] for item in values if item.get("slug")}
@@ -924,7 +1260,12 @@ def _annotate_series_coverage(evidence: list[Evidence]) -> list[Evidence]:
             (item.get("series_lifecycle") for item in values if item.get("series_lifecycle")),
             "complete",
         )
-        missing = [element for element in catalog if element not in elements]
+        required_retrieved_elements = (
+            catalog if lifecycle == "releasing" else expected or catalog
+        )
+        missing = [
+            element for element in required_retrieved_elements if element not in elements
+        ]
         unreleased = (
             [element for element in expected if element not in catalog]
             if lifecycle == "releasing"
@@ -934,7 +1275,13 @@ def _annotate_series_coverage(evidence: list[Evidence]) -> list[Evidence]:
             [item.get("series_catalog_member_count") or 0 for item in values]
             or [len(catalog)]
         ) or len(catalog)
-        complete = bool(catalog_count) and len(retrieved_slugs) >= catalog_count
+        missing_catalog_members = len(retrieved_slugs) < catalog_count
+        if lifecycle == "releasing":
+            status = "releasing"
+        elif missing or missing_catalog_members:
+            status = "missing"
+        else:
+            status = "complete"
         for item in values:
             item["series_elements"] = elements
             item["series_expected_elements"] = expected
@@ -944,7 +1291,8 @@ def _annotate_series_coverage(evidence: list[Evidence]) -> list[Evidence]:
             item["series_catalog_member_count"] = catalog_count
             item["series_retrieved_member_count"] = len(retrieved_slugs)
             item["series_unreleased_elements"] = unreleased
-            item["series_coverage_complete"] = complete
+            item["series_coverage_status"] = status
+            item["series_coverage_complete"] = status == "complete"
     return evidence
 
 
@@ -991,6 +1339,12 @@ def retrieve_entity(
         None,
         entity.series_key,
     )
+    if not variants:
+        variants = resolve_structural_series_variants(
+            mention,
+            object_types,
+            loader,
+        )
     all_objects = _all_objects(object_types, loader)
     query = entity.retrieval_query or mention
     retrieval_k = _env_int("KAMI_RAG_RETRIEVAL_K", 20)

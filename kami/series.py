@@ -19,6 +19,8 @@ SERIES_INFO_KEYS = {
     "series_key",
     "series_name",
     "series_aliases",
+    "series_contextual_aliases",
+    "series_banner",
     "series_expected_elements",
     "series_lifecycle",
     "series_detection",
@@ -73,12 +75,28 @@ def _matches_values(value: str, entry: dict[str, Any], prefix: str) -> bool:
     configured = any(selectors.values())
     if not configured:
         return True
+    normalized_value = unicodedata.normalize("NFKC", value)
+    normalized = {
+        key: [unicodedata.normalize("NFKC", str(candidate)) for candidate in values]
+        for key, values in selectors.items()
+        if key != "regexes"
+    }
     return bool(
-        any(value == str(candidate) for candidate in selectors["names"])
-        or any(value.startswith(str(candidate)) for candidate in selectors["prefixes"])
-        or any(value.endswith(str(candidate)) for candidate in selectors["suffixes"])
-        or any(str(candidate) in value for candidate in selectors["contains"])
-        or any(re.search(str(pattern), value) for pattern in selectors["regexes"])
+        any(normalized_value == candidate for candidate in normalized["names"])
+        or any(normalized_value.startswith(candidate) for candidate in normalized["prefixes"])
+        or any(normalized_value.endswith(candidate) for candidate in normalized["suffixes"])
+        or any(candidate in normalized_value for candidate in normalized["contains"])
+        or any(
+            re.search(str(pattern), value)
+            for pattern in selectors["regexes"]
+        )
+    )
+
+
+def _has_selectors(entry: dict[str, Any], prefix: str) -> bool:
+    return any(
+        entry.get(f"{prefix}_{suffix}")
+        for suffix in ("names", "prefixes", "suffixes", "contains", "regexes")
     )
 
 
@@ -97,10 +115,11 @@ def _matches_entry(
         or info.get("入手方法")
         or ""
     )
-    acquisition_names = entry.get("acquisition_names") or []
-    if acquisition_names and acquisition not in {
-        str(value) for value in acquisition_names
-    }:
+    if _has_selectors(entry, "acquisition") and not _matches_values(
+        acquisition,
+        entry,
+        "acquisition",
+    ):
         return False
 
     effect_selectors = any(
@@ -127,21 +146,48 @@ def series_metadata(
             continue
         if not _matches_entry(original_name, entry, record):
             continue
-        aliases = [str(value) for value in entry.get("aliases") or [] if value]
-        if original_name not in aliases:
-            aliases.append(original_name)
-        return {
-            "series_key": str(entry.get("series_key") or ""),
-            "series_name": str(entry.get("series_name") or ""),
-            "series_aliases": aliases,
-            "series_expected_elements": [
-                str(value).lower()
-                for value in entry.get("expected_elements") or []
-                if value
-            ],
-            "series_lifecycle": str(entry.get("lifecycle") or "complete"),
-            "series_detection": "registry",
-        }
+        return _series_entry_metadata(entry, original_name)
+    return {}
+
+
+def _series_entry_metadata(
+    entry: dict[str, Any],
+    original_name: str,
+) -> dict[str, Any]:
+    aliases = [str(value) for value in entry.get("aliases") or [] if value]
+    if original_name and original_name not in aliases:
+        aliases.append(original_name)
+    return {
+        "series_key": str(entry.get("series_key") or ""),
+        "series_name": str(entry.get("series_name") or ""),
+        "series_aliases": aliases,
+        "series_contextual_aliases": [
+            str(value) for value in entry.get("contextual_aliases") or [] if value
+        ],
+        "series_banner": str(entry.get("banner_name") or ""),
+        "series_expected_elements": [
+            str(value).lower()
+            for value in entry.get("expected_elements") or []
+            if value
+        ],
+        "series_lifecycle": str(entry.get("lifecycle") or "complete"),
+        "series_detection": "registry",
+    }
+
+
+def _series_metadata_by_key(
+    object_type: str,
+    series_key: str,
+    original_name: str,
+) -> dict[str, Any]:
+    if not series_key:
+        return {}
+    for entry in load_series_registry():
+        if (
+            str(entry.get("object_type") or "") == object_type
+            and str(entry.get("series_key") or "") == series_key
+        ):
+            return _series_entry_metadata(entry, original_name)
     return {}
 
 
@@ -160,6 +206,12 @@ def enrich_info_series(
     if source_name:
         info["original_name"] = source_name
     metadata = series_metadata(object_type, source_name, record)
+    if not metadata:
+        metadata = _series_metadata_by_key(
+            object_type,
+            str(info.get("series_key") or ""),
+            source_name,
+        )
     if metadata:
         info.update(metadata)
     elif not info.get("series_key"):
@@ -342,6 +394,7 @@ def reconcile_series_data(
     *,
     changed_source_urls: Iterable[str] = (),
     allow_auto_attach: bool = False,
+    sync_translations: bool = False,
 ) -> dict[str, Any]:
     changed_urls = {str(value) for value in changed_source_urls if value}
     paths = sorted((data_dir / object_type).glob("*/raw.jsonl"))
@@ -413,6 +466,37 @@ def reconcile_series_data(
         if records != original:
             _write_jsonl(path, records)
 
+    translated_records_updated = 0
+    if sync_translations:
+        canonical_by_url = {
+            source_url: {
+                key: copy.deepcopy(value)
+                for key, value in _record_info(record).items()
+                if key in SERIES_INFO_KEYS
+            }
+            for record in all_records
+            if (source_url := _source_url(record))
+        }
+        for path in sorted(
+            (data_dir / object_type).glob("*/translated/*.jsonl")
+        ):
+            translated_records = _read_jsonl(path)
+            original_records = copy.deepcopy(translated_records)
+            for index, record in enumerate(translated_records):
+                metadata = canonical_by_url.get(_source_url(record))
+                if metadata is None:
+                    continue
+                info = _record_info(record)
+                for key in SERIES_INFO_KEYS:
+                    if key in metadata:
+                        info[key] = copy.deepcopy(metadata[key])
+                    else:
+                        info.pop(key, None)
+                if record != original_records[index]:
+                    translated_records_updated += 1
+            if translated_records != original_records:
+                _write_jsonl(path, translated_records)
+
     manifest_path = data_dir / SERIES_MANIFEST_NAME
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -433,6 +517,7 @@ def reconcile_series_data(
     return {
         "registry_matches": registry_matches,
         "auto_attached": auto_attached,
+        "translated_records_updated": translated_records_updated,
         "high_confidence_candidates": sum(
             candidate["confidence"] == "high" for candidate in candidates
         ),

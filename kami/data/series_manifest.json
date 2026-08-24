@@ -219,5 +219,97 @@
         }
       ]
     }
+  ],
+  "kamihime": [
+    {
+      "series_key": "kamihime:auto:efc83dc4b965",
+      "object_type": "kamihime",
+      "signature": "リアス・",
+      "confidence": "medium",
+      "elements": [
+        "fire",
+        "water"
+      ],
+      "members": [
+        "https://wikiwiki.jp/kamiprodb/%E3%83%AA%E3%82%A2%E3%82%B9%E3%83%BB%E3%82%B0%E3%83%AC%E3%83%A2%E3%83%AA%E3%83%BC",
+        "https://wikiwiki.jp/kamiprodb/%EF%BC%BB%E7%B4%85%E5%AB%81%EF%BC%BD%E3%83%AA%E3%82%A2%E3%82%B9%E3%83%BB%E3%82%B0%E3%83%AC%E3%83%A2%E3%83%AA%E3%83%BC"
+      ],
+      "member_details": [
+        {
+          "source_url": "https://wikiwiki.jp/kamiprodb/%E3%83%AA%E3%82%A2%E3%82%B9%E3%83%BB%E3%82%B0%E3%83%AC%E3%83%A2%E3%83%AA%E3%83%BC",
+          "original_name": "リアス・グレモリー",
+          "element": "fire"
+        },
+        {
+          "source_url": "https://wikiwiki.jp/kamiprodb/%EF%BC%BB%E7%B4%85%E5%AB%81%EF%BC%BD%E3%83%AA%E3%82%A2%E3%82%B9%E3%83%BB%E3%82%B0%E3%83%AC%E3%83%A2%E3%83%AA%E3%83%BC",
+          "original_name": "［紅嫁］リアス・グレモリー",
+          "element": "water"
+        }
+      ]
+    },
+    {
+      "series_key": "kamihime:auto:482cdcbe48a7",
+      "object_type": "kamihime",
+      "signature": "ウォフ・",
+      "confidence": "medium",
+      "elements": [
+        "water",
+        "wind"
+      ],
+      "members": [
+        "https://wikiwiki.jp/kamiprodb/%E3%82%A6%E3%82%A9%E3%83%95%E3%83%BB%E3%83%9E%E3%83%8A%E3%83%95",
+        "https://wikiwiki.jp/kamiprodb/%EF%BC%BB%E5%BF%97%E6%93%8D%E5%B5%90%E7%A0%B2%EF%BC%BD%E3%82%A6%E3%82%A9%E3%83%95%E3%83%BB%E3%83%9E%E3%83%8A%E3%83%95"
+      ],
+      "member_details": [
+        {
+          "source_url": "https://wikiwiki.jp/kamiprodb/%E3%82%A6%E3%82%A9%E3%83%95%E3%83%BB%E3%83%9E%E3%83%8A%E3%83%95",
+          "original_name": "ウォフ・マナフ",
+          "element": "water"
+        },
+        {
+          "source_url": "https://wikiwiki.jp/kamiprodb/%EF%BC%BB%E5%BF%97%E6%93%8D%E5%B5%90%E7%A0%B2%EF%BC%BD%E3%82%A6%E3%82%A9%E3%83%95%E3%83%BB%E3%83%9E%E3%83%8A%E3%83%95",
+          "original_name": "［志操嵐砲］ウォフ・マナフ",
+          "element": "wind"
+        }
+      ]
+    },
+    {
+      "series_key": "kamihime:auto:ca696dd77786",
+      "object_type": "kamihime",
+      "signature": "クー・",
+      "confidence": "medium",
+      "elements": [
+        "light",
+        "wind"
+      ],
+      "members": [
+        "https://wikiwiki.jp/kamiprodb/%E3%82%AF%E3%83%BC%E3%83%BB%E3%83%95%E3%83%BC%E3%83%AA%E3%83%B3",
+        "https://wikiwiki.jp/kamiprodb/%E3%82%AF%E3%83%BC%E3%83%BB%E3%83%95%E3%83%BC%E3%83%AA%E3%83%B3%EF%BC%BB%E7%A5%9E%E5%8C%96%E8%A6%9A%E9%86%92%EF%BC%BD",
+        "https://wikiwiki.jp/kamiprodb/%E3%82%AF%E3%83%BC%E3%83%BB%E3%83%95%E3%83%BC%E3%83%AA%E3%83%B3%EF%BC%BB%E7%A5%9E%E6%83%B3%E7%9C%9F%E5%8C%96%EF%BC%BD",
+        "https://wikiwiki.jp/kamiprodb/%EF%BC%BB%E7%99%BE%E9%8C%AC%E6%88%90%E9%8B%BC%EF%BC%BD%E3%82%AF%E3%83%BC%E3%83%BB%E3%83%95%E3%83%BC%E3%83%AA%E3%83%B3"
+      ],
+      "member_details": [
+        {
+          "source_url": "https://wikiwiki.jp/kamiprodb/%EF%BC%BB%E7%99%BE%E9%8C%AC%E6%88%90%E9%8B%BC%EF%BC%BD%E3%82%AF%E3%83%BC%E3%83%BB%E3%83%95%E3%83%BC%E3%83%AA%E3%83%B3",
+          "original_name": "［百錬成鋼］クー・フーリン",
+          "element": "light"
+        },
+        {
+          "source_url": "https://wikiwiki.jp/kamiprodb/%E3%82%AF%E3%83%BC%E3%83%BB%E3%83%95%E3%83%BC%E3%83%AA%E3%83%B3",
+          "original_name": "クー・フーリン",
+          "element": "wind"
+        },
+        {
+          "source_url": "https://wikiwiki.jp/kamiprodb/%E3%82%AF%E3%83%BC%E3%83%BB%E3%83%95%E3%83%BC%E3%83%AA%E3%83%B3%EF%BC%BB%E7%A5%9E%E5%8C%96%E8%A6%9A%E9%86%92%EF%BC%BD",
+          "original_name": "クー・フーリン［神化覚醒］",
+          "element": "wind"
+        },
+        {
+          "source_url": "https://wikiwiki.jp/kamiprodb/%E3%82%AF%E3%83%BC%E3%83%BB%E3%83%95%E3%83%BC%E3%83%AA%E3%83%B3%EF%BC%BB%E7%A5%9E%E6%83%B3%E7%9C%9F%E5%8C%96%EF%BC%BD",
+          "original_name": "クー・フーリン［神想真化］",
+          "element": "wind"
+        }
+      ]
+    }
   ]
 }

@@ -43,6 +43,10 @@ def _metadata(item: dict[str, Any], section: str, index: int) -> dict[str, Any]:
         "element": str(item.get("element") or ""),
         "series_key": str(item.get("series_key") or ""),
         "series_name": str(item.get("series_name") or ""),
+        "series_contextual_aliases": list(
+            item.get("series_contextual_aliases") or []
+        ),
+        "series_banner": str(item.get("series_banner") or ""),
         "series_lifecycle": str(item.get("series_lifecycle") or "complete"),
         "series_catalog_elements": list(item.get("series_catalog_elements") or []),
         "series_catalog_member_count": int(item.get("series_catalog_member_count") or 0),
