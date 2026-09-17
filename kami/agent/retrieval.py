@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import threading
+import time
 import unicodedata
 import uuid
 from dataclasses import dataclass
@@ -16,6 +17,8 @@ from difflib import SequenceMatcher
 from collections import defaultdict
 from collections.abc import Callable, Iterable
 from functools import lru_cache
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
@@ -28,7 +31,14 @@ from .documents import (
     CatalogLoader,
     catalog_documents,
     documents_fingerprint,
+    documents_payload_fingerprint,
     object_documents,
+)
+from .embedding_cache import (
+    CachedDenseEmbeddings,
+    CachedSparseEmbeddings,
+    EmbeddingCache,
+    embedding_namespace,
 )
 from .schemas import EntityQuery, Evidence
 
@@ -77,6 +87,17 @@ class RetrievalRuntime:
 
 
 _RETRIEVAL_RUNTIME: RetrievalRuntime | None = None
+_DEFAULT_RUNTIME = object()
+_REQUEST_RUNTIME: ContextVar[Any] = ContextVar("request_retrieval_runtime", default=_DEFAULT_RUNTIME)
+
+
+@contextmanager
+def retrieval_scope(runtime: RetrievalRuntime | None):
+    token = _REQUEST_RUNTIME.set(runtime)
+    try:
+        yield
+    finally:
+        _REQUEST_RUNTIME.reset(token)
 
 
 def _env_int(name: str, default: int, minimum: int = 1) -> int:
@@ -526,6 +547,7 @@ def expected_index_metadata(
 def _open_runtime_components(
     index_dir: Path,
     manifest: dict[str, Any],
+    *, device: str | None = None,
 ) -> tuple[Any, Any]:
     from langchain_qdrant import FastEmbedSparse, QdrantVectorStore, RetrievalMode
     from qdrant_client import QdrantClient
@@ -533,7 +555,7 @@ def _open_runtime_components(
     dense = _query_embedding(
         str(manifest["model_id"]),
         str(manifest["model_revision"]),
-        resolve_embedding_device(),
+        resolve_embedding_device(device),
     )
     sparse = FastEmbedSparse(model_name=str(manifest["sparse_model"]))
     client = QdrantClient(path=str(index_dir / "qdrant"))
@@ -587,6 +609,9 @@ def start_retrieval_runtime(
 
 
 def get_retrieval_runtime() -> RetrievalRuntime | None:
+    scoped = _REQUEST_RUNTIME.get()
+    if scoped is not _DEFAULT_RUNTIME:
+        return scoped
     return _RETRIEVAL_RUNTIME
 
 
@@ -603,6 +628,9 @@ def stop_retrieval_runtime() -> None:
 
 
 def index_available() -> bool:
+    scoped = _REQUEST_RUNTIME.get()
+    if scoped is not _DEFAULT_RUNTIME:
+        return scoped is not None
     manifest = _read_manifest()
     return bool(
         manifest.get("collection")
@@ -641,11 +669,16 @@ def _build_cache_matches(
     collection: str,
     documents: int,
     qdrant_client_version: str,
+    payload_fingerprint: str | None = None,
 ) -> bool:
     return bool(
         manifest.get("collection") == collection
         and int(manifest.get("documents") or 0) == documents
         and manifest.get("qdrant_client_version") == qdrant_client_version
+        and (
+            payload_fingerprint is None
+            or manifest.get("payload_fingerprint") == payload_fingerprint
+        )
     )
 
 
@@ -677,8 +710,15 @@ def build_rag_index(
     loader: CatalogLoader = load_catalog_items,
     device: str | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    local_release_id: str | None = None,
+    index_dir: str | Path | None = None,
+    batch_size: int | None = None,
+    embedding_cache: EmbeddingCache | None = None,
 ) -> dict[str, Any]:
-    if get_retrieval_runtime() is not None:
+    build_started = time.perf_counter()
+    target_dir = Path(index_dir).resolve() if index_dir is not None else INDEX_DIR
+    runtime = get_retrieval_runtime()
+    if runtime is not None and (index_dir is None or runtime.index_dir == target_dir):
         raise RuntimeError("Cannot build an index while the retrieval runtime is active")
     try:
         from langchain_qdrant import (
@@ -707,6 +747,7 @@ def build_rag_index(
             }
         )
     content_fingerprint = documents_fingerprint(documents)
+    payload_fingerprint = documents_payload_fingerprint(documents)
     resolved_device = resolve_embedding_device(device)
     fingerprint = hashlib.sha256(
         (
@@ -715,18 +756,23 @@ def build_rag_index(
         ).encode("utf-8")
     ).hexdigest()[:16]
     collection = f"kamiwiki_{fingerprint}"
-    INDEX_DIR.parent.mkdir(parents=True, exist_ok=True)
+    target_dir.parent.mkdir(parents=True, exist_ok=True)
 
     with _INDEX_LOCK:
-        current_manifest = _read_manifest()
+        current_manifest = _read_manifest(target_dir)
         qdrant_client_version = importlib.metadata.version("qdrant-client")
         if _build_cache_matches(
             current_manifest,
             collection=collection,
             documents=len(documents),
             qdrant_client_version=qdrant_client_version,
+            payload_fingerprint=payload_fingerprint,
         ):
-            _remove_inactive_collection_directories(INDEX_DIR, collection)
+            if local_release_id and current_manifest.get("local_release_id") != local_release_id:
+                from ..local_data import write_json
+                current_manifest["local_release_id"] = local_release_id
+                write_json(target_dir / "manifest.json", current_manifest)
+            _remove_inactive_collection_directories(target_dir, collection)
             if progress_callback:
                 progress_callback(
                     {
@@ -739,30 +785,66 @@ def build_rag_index(
                     }
                 )
             return current_manifest
-        if progress_callback:
-            progress_callback(
-                {
-                    "phase": "loading_models",
-                    "processed": 0,
-                    "total": 0,
-                    "progress": 0,
-                    "message": f"Loading embedding models on {resolved_device}",
-                }
-            )
-        dense = SentenceTransformerEmbeddingAdapter(
-            _embedding_model(),
-            device=resolved_device,
+        dense_factory = lambda: SentenceTransformerEmbeddingAdapter(
+            _embedding_model(), device=resolved_device,
             revision=EMBEDDING_MODEL_REVISION,
         )
-        sparse = FastEmbedSparse(model_name=_sparse_model())
-        vector_size = len(dense.embed_query("Kamihime Project"))
-        if vector_size != EMBEDDING_DIMENSION:
-            raise IndexCompatibilityError(
-                f"Dense embedding dimension must be {EMBEDDING_DIMENSION}, "
-                f"got {vector_size}"
+        sparse_factory = lambda: FastEmbedSparse(model_name=_sparse_model())
+        if embedding_cache is None:
+            if progress_callback:
+                progress_callback(
+                    {
+                        "phase": "loading_models", "processed": 0, "total": 0,
+                        "progress": 0,
+                        "message": f"Loading embedding models on {resolved_device}",
+                    }
+                )
+            dense = dense_factory()
+            sparse = sparse_factory()
+            vector_size = len(dense.embed_query("Kamihime Project"))
+            if vector_size != EMBEDDING_DIMENSION:
+                raise IndexCompatibilityError(
+                    f"Dense embedding dimension must be {EMBEDDING_DIMENSION}, "
+                    f"got {vector_size}"
+                )
+        else:
+            dense_namespace = embedding_namespace(
+                "dense",
+                {
+                    "model": _embedding_model(),
+                    "revision": EMBEDDING_MODEL_REVISION,
+                    "dimension": EMBEDDING_DIMENSION,
+                    "document_prefix": "passage-if-e5-v1",
+                    "normalize_embeddings": True,
+                    "device": resolved_device,
+                    "dtype": "float32",
+                    "sentence_transformers": importlib.metadata.version(
+                        "sentence-transformers"
+                    ),
+                    "torch": importlib.metadata.version("torch"),
+                },
             )
-        staging_dir = INDEX_DIR.with_name(
-            f"{INDEX_DIR.name}.build-{uuid.uuid4().hex}"
+            sparse_namespace = embedding_namespace(
+                "sparse",
+                {
+                    "model": _sparse_model(),
+                    "fastembed": importlib.metadata.version("fastembed"),
+                    "langchain_qdrant": importlib.metadata.version(
+                        "langchain-qdrant"
+                    ),
+                },
+            )
+            dense = CachedDenseEmbeddings(
+                cache=embedding_cache, namespace=dense_namespace,
+                dimension=EMBEDDING_DIMENSION, factory=dense_factory,
+            )
+            sparse = CachedSparseEmbeddings(
+                cache=embedding_cache, namespace=sparse_namespace,
+                factory=sparse_factory,
+            )
+            vector_size = EMBEDDING_DIMENSION
+        staging_dir = target_dir.with_name(
+            f"{target_dir.name}.build-{uuid.uuid4().hex}"
         )
         staging_dir.mkdir()
         client = QdrantClient(path=str(staging_dir / "qdrant"))
@@ -793,6 +875,13 @@ def build_rag_index(
                 vector_name="dense",
                 sparse_vector_name="sparse",
             )
+            if embedding_cache is not None:
+                # Qdrant probes the dense interface with ``dummy_text`` during
+                # construction. Keep model timing, but report catalog cache counts.
+                for stats in (dense.stats, sparse.stats):
+                    stats.hits = 0
+                    stats.misses = 0
+                    stats.computed_unique = 0
             ids = [
                 str(
                     uuid.uuid5(
@@ -802,8 +891,9 @@ def build_rag_index(
                 )
                 for doc in documents
             ]
-            batch_size = _env_int("KAMI_RAG_INDEX_BATCH_SIZE", 64)
+            batch_size = max(1, batch_size or _env_int("KAMI_RAG_INDEX_BATCH_SIZE", 64))
             total = len(documents)
+            indexing_started = time.perf_counter()
             if progress_callback:
                 progress_callback(
                     {
@@ -821,6 +911,20 @@ def build_rag_index(
                     ids=ids[offset:end],
                 )
                 if progress_callback:
+                    cache_status = (
+                        {
+                            "dense_cache_hits": dense.stats.hits,
+                            "dense_cache_misses": dense.stats.misses,
+                            "sparse_cache_hits": sparse.stats.hits,
+                            "sparse_cache_misses": sparse.stats.misses,
+                            "embedded_unique": max(
+                                dense.stats.computed_unique,
+                                sparse.stats.computed_unique,
+                            ),
+                        }
+                        if embedding_cache is not None
+                        else {}
+                    )
                     progress_callback(
                         {
                             "phase": "indexing",
@@ -828,9 +932,22 @@ def build_rag_index(
                             "total": total,
                             "progress": round(end * 100 / total),
                             "message": "Embedding and indexing documents",
+                            **cache_status,
                         }
                     )
 
+            indexing_seconds = time.perf_counter() - indexing_started
+            if progress_callback:
+                progress_callback(
+                    {
+                        "phase": "validating",
+                        "processed": total,
+                        "total": total,
+                        "progress": 100,
+                        "message": "Validating the new RAG index",
+                    }
+                )
+            validation_started = time.perf_counter()
             smoke = store.similarity_search_with_score(
                 "Kamihime Project",
                 k=1,
@@ -840,11 +957,13 @@ def build_rag_index(
             for description in client.get_collections().collections:
                 if description.name != collection:
                     client.delete_collection(description.name)
+            validation_seconds = time.perf_counter() - validation_started
 
             manifest = {
                 "schema_version": INDEX_SCHEMA_VERSION,
                 "collection": collection,
                 "catalog_fingerprint": content_fingerprint,
+                "payload_fingerprint": payload_fingerprint,
                 "documents": len(documents),
                 "model_id": _embedding_model(),
                 "model_revision": EMBEDDING_MODEL_REVISION,
@@ -853,6 +972,24 @@ def build_rag_index(
                 "qdrant_client_version": qdrant_client_version,
                 "built_at": datetime.now(UTC).isoformat(),
             }
+            if embedding_cache is not None:
+                manifest["embedding_cache"] = {
+                    "dense_hits": dense.stats.hits,
+                    "dense_misses": dense.stats.misses,
+                    "dense_computed_unique": dense.stats.computed_unique,
+                    "sparse_hits": sparse.stats.hits,
+                    "sparse_misses": sparse.stats.misses,
+                    "sparse_computed_unique": sparse.stats.computed_unique,
+                    "dense_load_seconds": round(dense.stats.load_seconds, 6),
+                    "dense_embed_seconds": round(dense.stats.embed_seconds, 6),
+                    "sparse_load_seconds": round(sparse.stats.load_seconds, 6),
+                    "sparse_embed_seconds": round(sparse.stats.embed_seconds, 6),
+                    "indexing_seconds": round(indexing_seconds, 6),
+                    "validation_seconds": round(validation_seconds, 6),
+                    "build_seconds": round(time.perf_counter() - build_started, 6),
+                }
+            if local_release_id:
+                manifest["local_release_id"] = local_release_id
             temporary = staging_dir / "manifest.tmp"
             temporary.write_text(
                 json.dumps(manifest, ensure_ascii=False, indent=2),
@@ -868,7 +1005,7 @@ def build_rag_index(
         client.close()
         assert built_manifest is not None
         try:
-            _promote_staged_index(INDEX_DIR, staging_dir)
+            _promote_staged_index(target_dir, staging_dir)
         except BaseException:
             if staging_dir.exists():
                 shutil.rmtree(staging_dir)
@@ -924,6 +1061,8 @@ def _qdrant_search(
 
     runtime = get_retrieval_runtime()
     if runtime is None:
+        if _REQUEST_RUNTIME.get() is not _DEFAULT_RUNTIME:
+            return []
         manifest = _read_manifest()
         if not manifest:
             return []
@@ -991,13 +1130,14 @@ def _fallback_search(
     return scored[:k]
 
 
-@lru_cache(maxsize=1)
-def _reranker_model():
+@lru_cache(maxsize=2)
+def _reranker_model(device: str | None = None):
     from sentence_transformers import CrossEncoder
 
     return CrossEncoder(
         RERANKER_MODEL_ID,
         revision=RERANKER_MODEL_REVISION,
+        **({"device": device} if device else {}),
     )
 
 
@@ -1005,7 +1145,8 @@ def _rerank(query: str, values: list[tuple[Document, float]]) -> list[tuple[Docu
     if not values or os.getenv("KAMI_RAG_RERANK", "1") == "0":
         return values
     try:
-        model = _reranker_model()
+        model = (_reranker_model(os.getenv("KAMI_LOCAL_RAG_QUERY_DEVICE", "cpu"))
+                 if _REQUEST_RUNTIME.get() is not _DEFAULT_RUNTIME else _reranker_model())
         scores = model.predict([(query, doc.page_content) for doc, _ in values])
     except Exception:
         return values

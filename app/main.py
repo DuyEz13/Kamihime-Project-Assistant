@@ -1,9 +1,10 @@
 from pathlib import Path
+from contextlib import asynccontextmanager
 from urllib.parse import unquote, urlsplit
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
@@ -20,6 +21,10 @@ from kami.data_store import (
     load_catalog_items,
 )
 from kami.pipeline import get_refresh_status, start_translation, start_update
+from kami.local_data import LocalDataStore, current_release, data_scope
+from kami.local_index import LocalRuntimeManager
+from kami.agent.retrieval import retrieval_scope
+import threading
 from kami.paths import (
     OBJECT_ELEMENTS,
     TRANSLATION_PROVIDERS,
@@ -71,7 +76,28 @@ CATALOGS = (
 )
 CATALOG_BY_KEY = {catalog["key"]: catalog for catalog in CATALOGS}
 
-app = FastAPI(title="KamiWiki")
+@asynccontextmanager
+async def lifespan(application):
+    try:
+        yield
+    finally:
+        manager = getattr(application.state, "local_runtime_manager", None)
+        if manager:
+            manager.close()
+            application.state.local_runtime_manager = None
+
+
+app = FastAPI(title="KamiWiki", lifespan=lifespan)
+_runtime_manager_lock = threading.Lock()
+
+
+def _local_runtime_manager() -> LocalRuntimeManager:
+    with _runtime_manager_lock:
+        manager = getattr(app.state, "local_runtime_manager", None)
+        if manager is None:
+            manager = LocalRuntimeManager(LocalDataStore())
+            app.state.local_runtime_manager = manager
+        return manager
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 app.mount(
     "/img",
@@ -80,6 +106,20 @@ app.mount(
 )
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 templates.env.globals["asset_version"] = ASSET_VERSION
+templates.env.globals["local_data_revision"] = lambda: (
+    current_release().release_id if current_release() else "legacy"
+)
+
+
+@app.middleware("http")
+async def local_data_snapshot(request: Request, call_next):
+    store = LocalDataStore()
+    with store.wiki_snapshot() as release:
+        with data_scope(release):
+            response = await call_next(request)
+    if request.url.path == "/api/update/status":
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 class ChatRequest(BaseModel):
@@ -209,12 +249,14 @@ def remove_chat_session(session_id: str):
 @app.post("/api/chat")
 def chat(request: ChatRequest):
     try:
-        return answer_chat(
-            message=request.message,
-            session_id=request.session_id,
-            provider=request.provider,
-            client_id=request.client_id,
-        )
+        with _local_runtime_manager().acquire() as lease:
+            with data_scope(lease.release), retrieval_scope(lease.runtime):
+                return answer_chat(
+                    message=request.message,
+                    session_id=request.session_id,
+                    provider=request.provider,
+                    client_id=request.client_id,
+                )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:

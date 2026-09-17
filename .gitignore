@@ -1,5 +1,7 @@
 # Secrets
 .env
+.env.*
+!.env.example
 
 # Python environments
 .venv/
@@ -23,19 +25,41 @@ __pycache__/
 *.log
 *.tmp
 vectorstore/
-kami/data/.translation_cache.json
-kami/data/chat_sessions.json
-kami/data/chat_memory.sqlite3*
-kami/data/chat_traces.jsonl*
-kami/data/rag_index/
+/kami/data/
+/kami/all_kami_data.json
+/kami/all_kami_data.jsonl
+/kami/kamihime_raw.jsonl
+/kami/kamihime_en.jsonl
 
 # OS files
 .DS_Store
 Thumbs.db
 
 # Other
-task_01.txt
-task_02.txt
+/task_*.txt
+/task_*.md
 /SYSTEM_PIPELINE.txt
 docs/
 tests/
+
+# Private workspace instructions and notes
+AGENTS.md
+agents.md
+.agents/
+.codex/
+/AI_ENGINEER_INTERVIEW_QA_BILINGUAL.txt
+/Chatbot&RAG.md
+
+# Private cloud demo and internal tooling
+/app/cloud/
+/cloud/
+/deploy/
+/Dockerfile.cloud*
+/cloud_system.txt
+/scripts/benchmark_cloud.py
+/scripts/cloud_admin.py
+/scripts/cloud_test.py
+/scripts/measure_cloud_xff.py
+/scripts/probe_deepseek.py
+/scripts/validate_cloud_image.py
+/scripts/generate_architecture_diagrams.py

@@ -1,412 +1,55 @@
-import threading
-import copy
-from datetime import datetime, timezone
+"""Local web adapter for the durable scheduled/manual data runner."""
+from __future__ import annotations
 
-from .crawler import (
-    configured_elements,
-    crawl_all_object_elements,
-    update_all_object_elements_latest,
-)
-from .data_store import DATA_DIR
-from .paths import (
-    TRANSLATION_PROVIDERS,
-    normalize_object_type,
-    normalize_translation_provider,
-)
-from .translator import translate_object_elements
-from .agent.retrieval import refresh_rag_index
-from .series import reconcile_series_data, series_source_urls
+import threading
+
+from .local_data import LocalDataStore, PipelineBusy
+from .paths import DATA_DIR, normalize_object_type, normalize_translation_provider
+from .pipeline_runner import run_update
 
 
 DEFAULT_UPDATE_TRANSLATION_PROVIDER = "deepl"
 
-_lock = threading.Lock()
-_status = {
-    "state": "idle",
-    "message": "Ready",
-    "started_at": None,
-    "finished_at": None,
-    "characters": None,
-    "mode": None,
-    "object_type": None,
-    "provider": None,
-    "progress": None,
-    "processed": None,
-    "total": None,
-    "device": None,
-    "model": None,
-    "crawl_progress": {},
-}
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
 
 def get_refresh_status() -> dict:
-    with _lock:
-        return copy.deepcopy(_status)
+    return LocalDataStore(DATA_DIR).status()
 
 
-def _set_status(**values) -> None:
-    with _lock:
-        _status.update(values)
-
-
-def _empty_crawl_progress(object_type: str = "kamihime") -> dict:
-    return {
-        element: {
-            "processed": 0,
-            "total": 0,
-            "progress": 0,
-            "character": "",
-            "url": "",
-        }
-        for element in configured_elements(object_type)
-    }
-
-
-def _crawl_progress(progress: dict) -> None:
-    element = str(progress.get("element") or "")
-    if not element:
-        return
-    processed = int(progress.get("processed") or 0)
-    total = int(progress.get("total") or 0)
-    percent = round(processed * 100 / total) if total else 0
-    character = str(progress.get("character") or "")
-    with _lock:
-        crawl_progress = copy.deepcopy(_status.get("crawl_progress") or {})
-        crawl_progress[element] = {
-            "processed": processed,
-            "total": total,
-            "progress": percent,
-            "character": character,
-            "url": str(progress.get("url") or ""),
-        }
-        totals = [
-            item
-            for item in crawl_progress.values()
-            if int(item.get("total") or 0) > 0
-        ]
-        overall_processed = sum(int(item.get("processed") or 0) for item in totals)
-        overall_total = sum(int(item.get("total") or 0) for item in totals)
-        overall_percent = (
-            round(overall_processed * 100 / overall_total)
-            if overall_total
-            else 0
-        )
-        suffix = f" Current: {character}" if character else ""
-        _status.update(
-            {
-                "state": "updating",
-                "crawl_progress": crawl_progress,
-                "progress": overall_percent,
-                "processed": overall_processed,
-                "total": overall_total,
-                "message": (
-                    f"Crawling object details: "
-                    f"{overall_processed}/{overall_total}"
-                    f"{suffix}"
-                ),
-            }
-        )
-
-
-def _translation_progress(progress: dict) -> None:
-    phase = progress["phase"]
-    if phase == "loading":
-        message = f"Loading translation model on {progress['device']}..."
-    elif phase == "preparing":
-        message = "Checking the translation cache..."
-    else:
-        message = (
-            f"Translating with {progress['device']}: "
-            f"{progress['processed']}/{progress['total']} text chunks"
-        )
-    _set_status(
-        state="translating",
-        message=message,
-        **progress,
-    )
-
-
-def _run_update(mode: str, object_type: str, provider: str) -> None:
+def _start(mode: str, object_type: str, provider: str) -> bool:
+    object_type = normalize_object_type(object_type)
+    provider = normalize_translation_provider(provider)
+    store = LocalDataStore(DATA_DIR)
     try:
-        if mode == "latest":
-            _set_status(
-                state="updating",
-                mode=mode,
-                object_type=object_type,
-                message=(
-                    f"Checking {object_type} element lists for new records..."
-                ),
-                crawl_progress=_empty_crawl_progress(object_type),
-                progress=0,
-                processed=0,
-                total=0,
-            )
-            results = update_all_object_elements_latest(
-                object_type,
-                DATA_DIR,
-                _crawl_progress,
-            )
-            total = sum(result["entries"] for result in results.values())
-            new_entries = sum(result["new_entries"] for result in results.values())
-            crawled_details = sum(
-                result["crawled_details"] for result in results.values()
-            )
-            removed_entries = sum(
-                result["removed_entries"] for result in results.values()
-            )
-            changed_source_urls = [
-                source_url
-                for result in results.values()
-                for source_url in result.get("new_source_urls", [])
-            ]
-            reconcile_series_data(
-                DATA_DIR,
-                object_type,
-                changed_source_urls=changed_source_urls,
-                allow_auto_attach=object_type in {"weapon", "eidolon"},
-            )
-            _set_status(
-                state="translating",
-                mode=mode,
-                message="Translating updated element data...",
-                progress=0,
-            )
-            translated = translate_object_elements(
-                DATA_DIR,
-                object_type,
-                results,
-                _translation_progress,
-                provider=provider,
-            )
-            _set_status(
-                state="indexing",
-                message="Refreshing the agentic RAG index...",
-                progress=99,
-            )
-            refresh_rag_index(object_type)
-            message = (
-                f"Latest update completed: {new_entries} new entries, "
-                f"{crawled_details} new detail pages crawled, "
-                f"{removed_entries} duplicate or stale entries removed, "
-                f"{sum(translated.values())} records rendered in English"
-            )
-        elif mode == "database":
-            source_urls_before = series_source_urls(DATA_DIR, object_type)
-            _set_status(
-                state="updating",
-                mode=mode,
-                object_type=object_type,
-                message=f"Rebuilding the full {object_type} database...",
-                crawl_progress=_empty_crawl_progress(object_type),
-                progress=0,
-                processed=0,
-                total=0,
-            )
-            counts = crawl_all_object_elements(
-                object_type,
-                DATA_DIR,
-                _crawl_progress,
-            )
-            changed_source_urls = (
-                series_source_urls(DATA_DIR, object_type) - source_urls_before
-            )
-            reconcile_series_data(
-                DATA_DIR,
-                object_type,
-                changed_source_urls=changed_source_urls,
-                allow_auto_attach=object_type in {"weapon", "eidolon"},
-            )
-            _set_status(
-                state="translating",
-                mode=mode,
-                message="Translating the rebuilt database...",
-                progress=0,
-            )
-            translated = translate_object_elements(
-                DATA_DIR,
-                object_type,
-                counts,
-                _translation_progress,
-                provider=provider,
-            )
-            _set_status(
-                state="indexing",
-                message="Refreshing the agentic RAG index...",
-                progress=99,
-            )
-            refresh_rag_index(object_type)
-            total = sum(counts.values())
-            summary = ", ".join(
-                f"{element}: {count}" for element, count in counts.items()
-            )
-            message = (
-                f"Database update completed and translated: {summary}"
-            )
-        else:
-            raise ValueError(f"Unknown update mode: {mode}")
-
-        _set_status(
-            state="completed",
-            message=message,
-            characters=total,
-            progress=100,
-            finished_at=_now(),
-        )
-    except Exception as exc:
-        detail = str(exc).strip()
-        if not detail or detail == "Message:":
-            detail = "No additional error details were provided"
-        _set_status(
-            state="failed",
-            message=f"{type(exc).__name__}: {detail}",
-            finished_at=_now(),
-        )
-
-
-def _run_translation(provider: str, object_type: str) -> None:
+        lock = store.lock()
+    except PipelineBusy:
+        return False
     try:
-        elements = configured_elements(object_type)
-        _set_status(
-            state="translating",
-            mode="translate",
-            object_type=object_type,
-            message=(
-                f"Translating existing {object_type} raw database "
-                f"with {provider}..."
-            ),
-            progress=0,
-            processed=0,
-            total=0,
-            crawl_progress={},
+        store.set_status(state="starting", message="Starting data update…", mode=mode,
+                         object_type=object_type, provider=provider, progress=0,
+                         finished_at=None, crawl_progress={})
+        thread = threading.Thread(
+            target=run_update,
+            kwargs=dict(mode=mode, object_type=object_type, provider=provider,
+                        store=store, acquired_lock=lock, trigger="manual"),
+            daemon=True,
         )
-        translated = translate_object_elements(
-            DATA_DIR,
-            object_type,
-            elements,
-            _translation_progress,
-            provider=provider,
-        )
-        _set_status(
-            state="indexing",
-            message="Refreshing the agentic RAG index...",
-            progress=99,
-        )
-        refresh_rag_index(object_type)
-        total = sum(translated.values())
-        summary = ", ".join(
-            f"{element}: {count}" for element, count in translated.items()
-        )
-        _set_status(
-            state="completed",
-            message=(
-                f"Existing database translated with {provider}: {summary}"
-            ),
-            characters=total,
-            progress=100,
-            finished_at=_now(),
-        )
-    except Exception as exc:
-        detail = str(exc).strip()
-        if not detail or detail == "Message:":
-            detail = "No additional error details were provided"
-        _set_status(
-            state="failed",
-            message=f"{type(exc).__name__}: {detail}",
-            finished_at=_now(),
-        )
+        thread.start()
+    except BaseException:
+        lock.close()
+        raise
+    return True
 
 
-def start_update(
-    mode: str,
-    object_type: str = "kamihime",
-    provider: str = DEFAULT_UPDATE_TRANSLATION_PROVIDER,
-) -> bool:
+def start_update(mode: str, object_type: str = "kamihime",
+                 provider: str = DEFAULT_UPDATE_TRANSLATION_PROVIDER) -> bool:
     if mode not in {"latest", "database"}:
         raise ValueError("Update mode must be latest or database")
-    selected_object_type = normalize_object_type(object_type)
-    selected_provider = normalize_translation_provider(provider)
-    with _lock:
-        if _status["state"] in {"starting", "updating", "translating", "indexing"}:
-            return False
-        _status.update(
-            {
-                "state": "starting",
-                "mode": mode,
-                "object_type": selected_object_type,
-                "provider": selected_provider,
-                "message": (
-                    f"Starting {mode} {selected_object_type} update "
-                    f"with {selected_provider} translation..."
-                ),
-                "started_at": _now(),
-                "finished_at": None,
-                "characters": None,
-                "progress": None,
-                "processed": None,
-                "total": None,
-                "device": None,
-                "model": None,
-                "crawl_progress": {},
-            }
-        )
-
-    thread = threading.Thread(
-        target=_run_update,
-        args=(mode, selected_object_type, selected_provider),
-        daemon=True,
-    )
-    thread.start()
-    return True
+    return _start(mode, object_type, provider)
 
 
-def start_translation(
-    provider: str,
-    object_type: str = "kamihime",
-) -> bool:
-    provider = provider.strip().lower()
-    selected_object_type = normalize_object_type(object_type)
-    if provider not in TRANSLATION_PROVIDERS:
-        raise ValueError(
-            "Translation provider must be one of: "
-            + ", ".join(TRANSLATION_PROVIDERS)
-        )
-    with _lock:
-        if _status["state"] in {"starting", "updating", "translating", "indexing"}:
-            return False
-        _status.update(
-            {
-                "state": "starting",
-                "mode": "translate",
-                "object_type": selected_object_type,
-                "message": (
-                    f"Starting {provider} translation for "
-                    f"{selected_object_type}..."
-                ),
-                "started_at": _now(),
-                "finished_at": None,
-                "characters": None,
-                "progress": 0,
-                "processed": 0,
-                "total": 0,
-                "device": None,
-                "model": None,
-                "crawl_progress": {},
-            }
-        )
-
-    thread = threading.Thread(
-        target=_run_translation,
-        args=(provider, selected_object_type),
-        daemon=True,
-    )
-    thread.start()
-    return True
+def start_translation(provider: str, object_type: str = "kamihime") -> bool:
+    return _start("translate", object_type, provider)
 
 
 def start_refresh() -> bool:
-    """Backward-compatible alias for a full database update."""
     return start_update("database")

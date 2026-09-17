@@ -6,7 +6,7 @@
   <title>{% block title %}KamiWiki{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', path='/wiki.css') }}?v={{ asset_version }}">
 </head>
-<body>
+<body data-data-revision="{{ local_data_revision() }}">
   <div class="app-layout">
     <aside id="sidebar" class="sidebar">
       <div class="sidebar-top">

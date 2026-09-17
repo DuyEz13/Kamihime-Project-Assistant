@@ -33,6 +33,18 @@ const sidebarNewChat = document.getElementById("sidebar-new-chat");
 const chatHistoryList = document.getElementById("chat-history-list");
 const chatHistoryEmpty = document.getElementById("chat-history-empty");
 let polling = false;
+let statusTimer = null;
+let pendingDataReload = false;
+let chatBusy = false;
+const renderedDataRevision = document.body.dataset.dataRevision || "legacy";
+
+function reloadUpdatedData() {
+  if (!pendingDataReload) return;
+  // Never interrupt an answer or discard the text currently being composed.
+  if (chatBusy || chatInput?.value.trim()) return;
+  pendingDataReload = false;
+  window.location.reload();
+}
 
 function titleCase(value) {
   return String(value || "")
@@ -123,7 +135,7 @@ function renderStatus(status) {
     translationDevice.textContent = status.device || "Detecting device...";
   }
   if (translationModel) translationModel.textContent = status.model || "";
-  const active = ["starting", "updating", "translating", "indexing"].includes(status.state);
+  const active = ["starting", "updating", "translating", "indexing", "validating", "publishing"].includes(status.state);
   actionButtons.forEach((button) => {
     button.disabled = active;
   });
@@ -152,23 +164,25 @@ function renderStatus(status) {
 async function pollStatus() {
   if (polling) return;
   polling = true;
-  const timer = setInterval(async () => {
+  async function checkStatus() {
+    let delay = 15000;
     try {
-      const response = await fetch("/api/update/status");
+      const response = await fetch("/api/update/status", {cache: "no-store"});
+      if (!response.ok) throw new Error("Status unavailable");
       const status = await response.json();
-      if (!renderStatus(status)) {
-        clearInterval(timer);
-        polling = false;
-        if (status.state === "completed") window.location.reload();
+      if (renderStatus(status)) delay = 2000;
+      if (status.data_revision && status.data_revision !== renderedDataRevision) {
+        pendingDataReload = true;
+        reloadUpdatedData();
       }
     } catch {
-      clearInterval(timer);
-      polling = false;
-      if (statusMessage) statusMessage.textContent = "Could not read refresh status.";
-      actionButtons.forEach((button) => { button.disabled = false; });
-      if (translationProvider) translationProvider.disabled = false;
+      // Temporary network failures must not permanently disable update detection.
+      delay = 5000;
+      if (statusMessage) statusMessage.textContent = "Reconnecting to update status…";
     }
-  }, 2000);
+    statusTimer = setTimeout(checkStatus, delay);
+  }
+  await checkStatus();
 }
 
 updateButtons.forEach((button) => {
@@ -226,9 +240,8 @@ translateForm?.addEventListener("submit", async (event) => {
   }
 });
 
-if (["starting", "updating", "translating", "indexing"].includes(statusBox?.dataset.state)) {
-  pollStatus();
-}
+// Detect updates from scheduled jobs and other tabs as well as this page's buttons.
+pollStatus();
 
 function closeSidebar() {
   document.body.classList.remove("sidebar-open");
@@ -513,12 +526,15 @@ async function loadChatHistory() {
 chatInput?.addEventListener("input", () => {
   chatInput.style.height = "auto";
   chatInput.style.height = `${Math.min(chatInput.scrollHeight, 180)}px`;
+  reloadUpdatedData();
 });
 
 function setChatBusy(busy) {
+  chatBusy = busy;
   if (chatInput) chatInput.disabled = busy;
   chatForm?.querySelector(".send-button")?.toggleAttribute("disabled", busy);
   if (chatModelProvider) chatModelProvider.disabled = busy;
+  if (!busy) reloadUpdatedData();
 }
 
 async function loadChatModels() {

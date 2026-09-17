@@ -2,7 +2,7 @@
 
 A simplified wiki website about Kamihime Project that integrates a chatbot to assist with character information. The data pipeline supports the three SSR object catalogs: Kamihime, Eidolons and Weapons.
 
-[Demo](https://kamiwiki-cloud-886145553960.asia-southeast1.run.app/)
+[DEMO](https://kamiwiki-cloud-886145553960.asia-southeast1.run.app/)
 
 ## Setup with uv
 
@@ -22,6 +22,17 @@ hybrid RAG index, and reranker. On Windows, it installs the pinned CUDA 12.4
 build of PyTorch; RAG automatically falls back to CPU when CUDA is unavailable.
 
 ## Data Crawling
+
+Data and indexes are generated locally and are not included in the repository.
+After `uv sync`, copy `.env.example` to `.env` and set `DEEPL_AUTH_KEY`, then
+initialize all three catalogs:
+
+```powershell
+uv run python scripts/update_data.py --mode database --skip-index
+```
+
+This crawls and translates the full database using your DeepL quota. Build the
+index afterward with the command in **Assistant Chatbot**.
 
 Full database crawling is intentionally conservative because the source wiki can return HTTP 429 when requests arrive too quickly. The default setup uses one detail worker, a global request interval, randomized per-character delay and exponential backoff with jitter:
 
@@ -106,18 +117,14 @@ KAMI_CHAT_TRACE_INCLUDE_CONTENT=0
 
 The local trace file records graph, retrieval, model and token diagnostics; raw prompts, retrieved content and answers are included only when `KAMI_CHAT_TRACE_INCLUDE_CONTENT=1`.
 
-Build the local index after the initial `uv sync`. The default device is `auto`,
-so the builder uses CUDA when PyTorch can access it and otherwise uses CPU:
+Build the local index after initializing the data above. Local builds default to CUDA
+and report an error if CUDA is unavailable:
 
 ```powershell
 uv run python scripts/build_rag_index.py
 ```
 
-Use `--device cpu`, `--device cuda`, or `--device cuda:<index>` only when you
-need to override automatic selection. Rebuild after changing normalized game
-data or RAG model/index settings. A rebuild is created in a separate staging
-directory and replaces the active index only after a successful smoke query, so
-a failed build does not destroy the last usable index.
+On a CPU-only machine, add `--device cpu`.
 
 Main RAG options:
 
@@ -133,7 +140,7 @@ KAMI_RAG_RERANK=1
 KAMI_RAG_INDEX_BATCH_SIZE=64
 ```
 
-To require CUDA instead of using automatic selection:
+To explicitly select CUDA:
 
 ```powershell
 uv run python scripts/build_rag_index.py --device cuda
@@ -146,6 +153,31 @@ uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 Open `http://127.0.0.1:8000/`.
+
+## Automatic local data updates (Windows)
+
+Register the daily 17:00 update task:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/register_data_update_task.ps1
+```
+
+Run an update manually or inspect its status:
+
+```powershell
+uv run python scripts/update_data.py
+uv run python scripts/update_data.py --status
+```
+
+The update command checks Kamihime, Eidolon and Weapon. When new data is
+published, the browser refreshes automatically and the RAG index is rebuilt with
+CUDA.
+
+To remove the schedule:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/register_data_update_task.ps1 -Remove
+```
 
 ## Project Structure
 

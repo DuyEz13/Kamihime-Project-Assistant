@@ -17,6 +17,7 @@ from .paths import (
     translation_provider_order,
 )
 from .series import SERIES_INFO_KEYS, enrich_info_series, enrich_record_series
+from .local_data import current_release
 
 RAW_DATA_PATH = BASE_DIR / "kami" / "kamihime_raw.jsonl"
 ENGLISH_DATA_PATH = BASE_DIR / "kami" / "kamihime_en.jsonl"
@@ -42,6 +43,8 @@ INTERNAL_INFO_KEYS = {
 
 
 def _configured_data_path() -> Path | None:
+    if current_release() is not None:
+        return None
     configured = os.getenv("KAMI_WIKI_DATA")
     if configured:
         path = Path(configured)
@@ -55,7 +58,10 @@ def _object_data_paths(object_type: str = "kamihime") -> list[Path]:
     if configured and selected_object_type == "kamihime":
         return [configured]
 
-    object_root = DATA_DIR / selected_object_type
+    release = current_release()
+    data_dir = release.root if release else DATA_DIR
+    provider = release.providers.get(selected_object_type) if release else None
+    object_root = data_dir / selected_object_type
     raw_element_paths = sorted(object_root.glob("*/raw.jsonl"))
     element_names = {path.parent.name for path in raw_element_paths}
     # The immutable cloud image intentionally ships only processed
@@ -71,12 +77,12 @@ def _object_data_paths(object_type: str = "kamihime") -> list[Path]:
             raw_path = raw_by_element.get(element)
             translated_paths = [
                 object_translation_path(
-                    DATA_DIR,
+                    data_dir,
                     selected_object_type,
                     element,
                     provider,
                 )
-                for provider in translation_provider_order()
+                for provider in translation_provider_order(provider)
             ]
             translated_path = next(
                 (path for path in translated_paths if path.exists()),
@@ -88,7 +94,7 @@ def _object_data_paths(object_type: str = "kamihime") -> list[Path]:
                 paths.append(raw_path)
         return paths
 
-    if selected_object_type != "kamihime":
+    if release or selected_object_type != "kamihime":
         return []
 
     legacy_raw_paths = sorted(
@@ -122,7 +128,8 @@ def _object_data_paths(object_type: str = "kamihime") -> list[Path]:
 
 
 def _object_raw_paths(object_type: str) -> list[Path]:
-    return sorted((DATA_DIR / object_type).glob("*/raw.jsonl"))
+    release = current_release()
+    return sorted(((release.root if release else DATA_DIR) / object_type).glob("*/raw.jsonl"))
 
 
 def _data_paths() -> list[Path]:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Callable
@@ -663,6 +664,7 @@ def _retrieve_node(state: AgentState, loader: CatalogLoader) -> dict[str, Any]:
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = [
                 executor.submit(
+                    copy_context().run,
                     retrieve_entity,
                     entity,
                     list(plan.target_types),

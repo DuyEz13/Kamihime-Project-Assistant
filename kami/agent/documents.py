@@ -191,3 +191,25 @@ def documents_fingerprint(documents: list[Document]) -> str:
         digest.update(str(doc.metadata.get("document_id", "")).encode("utf-8"))
         digest.update(doc.page_content.encode("utf-8"))
     return digest.hexdigest()[:16]
+
+
+def documents_payload_fingerprint(documents: list[Document]) -> str:
+    """Fingerprint complete serving payloads independently of embedding content."""
+    digest = hashlib.sha256()
+    for doc in sorted(
+        documents, key=lambda value: str(value.metadata.get("document_id", ""))
+    ):
+        payload = {
+            "document_id": str(doc.metadata.get("document_id", "")),
+            "page_content": doc.page_content,
+            "metadata": doc.metadata,
+        }
+        digest.update(
+            json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+    return digest.hexdigest()[:16]
