@@ -2,6 +2,8 @@
 
 A simplified wiki website about Kamihime Project that integrates a chatbot to assist with character information. The data pipeline supports the three SSR object catalogs: Kamihime, Eidolons and Weapons.
 
+[Demo](https://kamiwiki-cloud-886145553960.asia-southeast1.run.app/)
+
 ## Setup with uv
 
 ```powershell
