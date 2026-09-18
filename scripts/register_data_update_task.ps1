@@ -8,14 +8,15 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
-$Runner = Join-Path $PSScriptRoot 'run_data_update.ps1'
 $PythonPath = Join-Path $ProjectRoot '.venv/Scripts/python.exe'
+$PythonwPath = Join-Path $ProjectRoot '.venv/Scripts/pythonw.exe'
+$Runner = Join-Path $PSScriptRoot 'run_data_update_hidden.py'
 $Description = "KamiWiki local data worker: $ProjectRoot"
-$Arguments = "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$Runner`" -Provider $Provider"
+$Arguments = "`"$Runner`" --provider $Provider"
 $LegacyTaskName = 'KamiWiki-LocalData-Hourly'
 if ($Preview) {
     [pscustomobject]@{ TaskName = $TaskName; Schedule = 'Daily'; At = $At;
-        Command = 'powershell.exe'; Arguments = $Arguments; WorkingDirectory = $ProjectRoot;
+        Command = $PythonwPath; Arguments = $Arguments; WorkingDirectory = $ProjectRoot;
         CatchUp = $true;
         Catalogs = @('kamihime', 'eidolon', 'weapon');
         MultipleInstances = 'IgnoreNew'; BuildsRagIndexOnce = $true; IndexDevice = 'cuda' } | ConvertTo-Json
@@ -35,8 +36,10 @@ if ($Remove) {
     }
     return
 }
-if (-not (Test-Path -LiteralPath $PythonPath)) { throw 'Run uv sync before registering the task.' }
-$Action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $Arguments -WorkingDirectory $ProjectRoot
+if (-not (Test-Path -LiteralPath $PythonPath) -or -not (Test-Path -LiteralPath $PythonwPath)) {
+    throw 'Run uv sync before registering the task.'
+}
+$Action = New-ScheduledTaskAction -Execute $PythonwPath -Argument $Arguments -WorkingDirectory $ProjectRoot
 $Trigger = New-ScheduledTaskTrigger -Daily -At $At
 $Settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew `
     -ExecutionTimeLimit (New-TimeSpan -Hours 3)
