@@ -1,9 +1,14 @@
 const updateButtons = Array.from(document.querySelectorAll(".update-button"));
+const updatePickers = Array.from(document.querySelectorAll("[data-update-picker]"));
+const updateMenuTriggers = Array.from(document.querySelectorAll("[data-update-menu-trigger]"));
+const updateConfirmButtons = Array.from(document.querySelectorAll("[data-update-confirm-start]"));
 const translateButton = document.getElementById("translate-database");
 const translateForm = document.getElementById("translate-form");
 const translationProvider = document.getElementById("translation-provider");
 const actionButtons = [
   ...updateButtons,
+  ...updateMenuTriggers,
+  ...updateConfirmButtons,
   ...Array.from(document.querySelectorAll(".translate-button")),
 ];
 const statusBox = document.getElementById("refresh-status");
@@ -36,7 +41,13 @@ let polling = false;
 let statusTimer = null;
 let pendingDataReload = false;
 let chatBusy = false;
+let pendingDatabaseUpdate = null;
 const renderedDataRevision = document.body.dataset.dataRevision || "legacy";
+const catalogLabels = {
+  kamihime: "Kamihime",
+  eidolon: "Eidolons",
+  weapon: "Weapons",
+};
 
 function reloadUpdatedData() {
   if (!pendingDataReload) return;
@@ -50,6 +61,100 @@ function titleCase(value) {
   return String(value || "")
     .replace(/[-_]+/g, " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function pickerParts(picker) {
+  return {
+    trigger: picker?.querySelector("[data-update-menu-trigger]"),
+    menu: picker?.querySelector("[data-update-menu]"),
+    options: picker?.querySelector("[data-update-menu-options]"),
+    confirmation: picker?.querySelector("[data-update-confirm]"),
+  };
+}
+
+function closeUpdatePicker(picker, {restoreFocus = false} = {}) {
+  const {trigger, menu, options, confirmation} = pickerParts(picker);
+  if (!trigger || !menu) return;
+  menu.hidden = true;
+  trigger.setAttribute("aria-expanded", "false");
+  picker.classList.remove("is-open");
+  if (options) options.hidden = false;
+  if (confirmation) confirmation.hidden = true;
+  if (pendingDatabaseUpdate?.picker === picker) pendingDatabaseUpdate = null;
+  if (restoreFocus) trigger.focus();
+}
+
+function closeAllUpdatePickers(except = null) {
+  updatePickers.forEach((picker) => {
+    if (picker !== except) closeUpdatePicker(picker);
+  });
+}
+
+function toggleUpdatePicker(picker) {
+  const {trigger, menu} = pickerParts(picker);
+  if (!trigger || !menu || trigger.disabled) return;
+  const opening = menu.hidden;
+  closeAllUpdatePickers(opening ? picker : null);
+  menu.hidden = !opening;
+  trigger.setAttribute("aria-expanded", String(opening));
+  picker.classList.toggle("is-open", opening);
+}
+
+function selectedProvider() {
+  return translationProvider?.value || "deepl";
+}
+
+function providerLabel(provider) {
+  return {deepl: "DeepL", google: "Google Translate", qwen: "Qwen"}[provider]
+    || titleCase(provider);
+}
+
+function requestDatabaseConfirmation(button) {
+  const picker = updatePickers.find(
+    (item) => item.dataset.updatePickerMode === button.dataset.updateMode
+  );
+  if (!picker) return;
+  const {options, confirmation} = pickerParts(picker);
+  const title = picker.querySelector("[data-update-confirm-title]");
+  const description = picker.querySelector("[data-update-confirm-description]");
+  if (!confirmation || !title || !description) return;
+  const label = button.dataset.updateLabel || catalogLabels[button.dataset.updateObjectType]
+    || titleCase(button.dataset.updateObjectType);
+  const count = button.dataset.updateElementCount || "all";
+  title.textContent = `Update ${label} database?`;
+  description.textContent = `Recrawl ${count} elements and translate changed records with ${providerLabel(selectedProvider())}.`;
+  if (options) options.hidden = true;
+  confirmation.hidden = false;
+  pendingDatabaseUpdate = {button, picker};
+}
+
+async function startCatalogUpdate(button) {
+  actionButtons.forEach((item) => { item.disabled = true; });
+  if (translationProvider) translationProvider.disabled = true;
+  if (statusBox) statusBox.dataset.state = "starting";
+  const objectType = button.dataset.updateObjectType || activeObjectType;
+  const mode = button.dataset.updateMode;
+  const label = button.dataset.updateLabel || catalogLabels[objectType] || titleCase(objectType);
+  if (statusMessage) statusMessage.textContent = `Starting ${label} update...`;
+  if (crawlProgressPanel) crawlProgressPanel.hidden = false;
+  renderCrawlProgress({});
+  closeAllUpdatePickers();
+  try {
+    const provider = selectedProvider();
+    const response = await fetch(
+      `/api/update/${objectType}/${mode}?provider=${encodeURIComponent(provider)}`,
+      { method: "POST" }
+    );
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.detail || "Update failed to start");
+    renderStatus(body);
+    pollStatus();
+  } catch (error) {
+    if (statusBox) statusBox.dataset.state = "failed";
+    if (statusMessage) statusMessage.textContent = error.message;
+    actionButtons.forEach((item) => { item.disabled = false; });
+    if (translationProvider) translationProvider.disabled = false;
+  }
 }
 
 function ensureCrawlProgressRow(element) {
@@ -141,14 +246,26 @@ function renderStatus(status) {
   });
   if (translationProvider) translationProvider.disabled = active;
   updateButtons.forEach((button) => {
-    const original = button.dataset.originalText || button.textContent;
-    button.dataset.originalText = original;
-    button.textContent = active && button.dataset.updateMode === status.mode
+    const matching = active
+      && button.dataset.updateMode === status.mode
+      && button.dataset.updateObjectType === status.object_type;
+    button.classList.toggle("is-active", matching);
+  });
+  updatePickers.forEach((picker) => {
+    const {trigger} = pickerParts(picker);
+    const label = trigger?.querySelector("[data-update-trigger-label]") || trigger;
+    if (!trigger || !label) return;
+    const original = trigger.dataset.originalText || label.textContent;
+    trigger.dataset.originalText = original;
+    const matching = active && picker.dataset.updatePickerMode === status.mode;
+    const objectLabel = catalogLabels[status.object_type]
+      || titleCase(status.object_type || "data");
+    label.textContent = matching
       ? status.state === "translating"
-        ? "Translating..."
+        ? `Translating ${objectLabel}...`
         : status.state === "indexing"
-          ? "Indexing..."
-          : "Updating..."
+          ? "Building RAG index..."
+          : `Updating ${objectLabel}...`
       : original;
   });
   if (translateButton) {
@@ -185,31 +302,57 @@ async function pollStatus() {
   await checkStatus();
 }
 
+updateMenuTriggers.forEach((trigger) => {
+  const picker = updatePickers.find(
+    (item) => item.querySelector("[data-update-menu-trigger]") === trigger
+  );
+  if (!picker) return;
+  trigger.addEventListener("click", () => toggleUpdatePicker(picker));
+  trigger.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      toggleUpdatePicker(picker);
+      picker.querySelector(".update-option:not(:disabled)")?.focus();
+    }
+  });
+});
+
 updateButtons.forEach((button) => {
   button.addEventListener("click", async () => {
-    actionButtons.forEach((item) => { item.disabled = true; });
-    if (translationProvider) translationProvider.disabled = true;
-    statusBox.dataset.state = "starting";
-    if (statusMessage) statusMessage.textContent = "Starting update...";
-    if (crawlProgressPanel) crawlProgressPanel.hidden = false;
-    renderCrawlProgress({});
-    try {
-      const mode = button.dataset.updateMode;
-      const provider = translationProvider?.value || "deepl";
-      const response = await fetch(
-        `/api/update/${activeObjectType}/${mode}?provider=${encodeURIComponent(provider)}`,
-        { method: "POST" }
-      );
-      const body = await response.json();
-      if (!response.ok) throw new Error(body.detail || "Update failed to start");
-      renderStatus(body);
-      pollStatus();
-    } catch (error) {
-      statusBox.dataset.state = "failed";
-      if (statusMessage) statusMessage.textContent = error.message;
-      actionButtons.forEach((item) => { item.disabled = false; });
-      if (translationProvider) translationProvider.disabled = false;
+    if (button.hasAttribute?.("data-confirm-update")
+        || Object.hasOwn(button.dataset, "confirmUpdate")) {
+      requestDatabaseConfirmation(button);
+      return;
     }
+    await startCatalogUpdate(button);
+  });
+});
+
+updatePickers.forEach((picker) => {
+  const start = picker.querySelector("[data-update-confirm-start]");
+  const cancel = picker.querySelector("[data-update-confirm-cancel]");
+  start?.addEventListener("click", async () => {
+    if (pendingDatabaseUpdate?.picker !== picker) return;
+    await startCatalogUpdate(pendingDatabaseUpdate.button);
+  });
+  cancel?.addEventListener("click", () => {
+    const target = pendingDatabaseUpdate?.button;
+    closeUpdatePicker(picker);
+    target?.focus();
+  });
+});
+
+document.addEventListener("click", (event) => {
+  updatePickers.forEach((picker) => {
+    if (!picker.contains(event.target)) closeUpdatePicker(picker);
+  });
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  updatePickers.forEach((picker) => {
+    const {menu} = pickerParts(picker);
+    if (menu && !menu.hidden) closeUpdatePicker(picker, {restoreFocus: true});
   });
 });
 

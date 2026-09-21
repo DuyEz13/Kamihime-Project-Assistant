@@ -17,16 +17,66 @@
       </div>
     </div>
     <div class="update-actions">
-      <button
-        class="refresh-button update-button"
-        data-update-mode="latest"
-        type="button"
-      >Update latest records</button>
-      <button
-        class="refresh-button secondary update-button"
-        data-update-mode="database"
-        type="button"
-      >Update Database</button>
+      {% for update_mode, update_label in (("latest", "Update latest"), ("database", "Update database")) %}
+      <div class="update-picker" data-update-picker data-update-picker-mode="{{ update_mode }}">
+        <button
+          class="refresh-button {% if update_mode == 'database' %}secondary{% endif %} update-menu-trigger"
+          type="button"
+          data-update-menu-trigger
+          aria-haspopup="menu"
+          aria-expanded="false"
+          aria-controls="update-menu-{{ update_mode }}"
+        >
+          <span data-update-trigger-label>{{ update_label }}</span>
+          <svg class="update-menu-chevron" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="m4 6 4 4 4-4" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75"/>
+          </svg>
+        </button>
+        <div
+          id="update-menu-{{ update_mode }}"
+          class="update-menu"
+          data-update-menu
+          role="menu"
+          hidden
+        >
+          <div class="update-menu-options" data-update-menu-options>
+            {% for catalog_item in catalogs %}
+            <button
+              class="update-option update-button"
+              type="button"
+              role="menuitem"
+              data-update-mode="{{ update_mode }}"
+              data-update-object-type="{{ catalog_item.key }}"
+              data-update-label="{{ catalog_item.label }}"
+              data-update-element-count="{{ catalog_item.elements|length }}"
+              {% if update_mode == "database" %}data-confirm-update{% endif %}
+            >
+              <span class="update-option-copy">
+                <strong>{{ catalog_item.label }}</strong>
+                <span>
+                  {% if update_mode == "latest" %}Check{% else %}Recrawl{% endif %}
+                  all {{ catalog_item.elements|length }} elements
+                </span>
+              </span>
+              {% if active_object_type == catalog_item.key %}<span class="current-catalog">Current</span>{% endif %}
+            </button>
+            {% endfor %}
+          </div>
+          {% if update_mode == "database" %}
+          <div class="update-confirm" data-update-confirm hidden aria-live="polite">
+            <div class="update-confirm-copy">
+              <strong data-update-confirm-title>Update database?</strong>
+              <span data-update-confirm-description></span>
+            </div>
+            <div class="update-confirm-actions">
+              <button class="update-confirm-cancel" type="button" data-update-confirm-cancel>Cancel</button>
+              <button class="refresh-button" type="button" data-update-confirm-start>Start update</button>
+            </div>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+      {% endfor %}
     </div>
   </div>
 
